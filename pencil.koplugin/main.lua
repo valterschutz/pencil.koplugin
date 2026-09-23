@@ -4583,7 +4583,6 @@ function Pencil:showNoteMenu()
     local chapter = self:chapterAnchor()
     local chapter_name = chapter and Notes.snippet(chapter.title, NOTE_TITLE_MAX_CHARS) or ""
     dialog = ButtonDialog:new{
-        title = _("Pen note"),
         buttons = {
             row(self:pageAnchor(),
                 _("New note for this page"),
