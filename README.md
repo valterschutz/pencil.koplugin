@@ -47,12 +47,14 @@ If you resize your book while reading it, your annotations will be WONKY. This i
    - **Pencil: undo** — undo last stroke or eraser action
    - **Pencil: pen note…** — choose a page, chapter or book note and open its canvas
    - **Pencil: browse pen notes** — list every pen note of the book
+   - **Pencil: scratchpad** — open the scratchpad, the pen note shared by every book
 
 ## Pen notes
 
 Pen notes are blank canvases stored next to the book in `pencil_notes.lua`, separate from the on-page strokes.
 
 - **Page, chapter or book note**: open the chooser from the Pencil menu (**Pen note…**), the **Pencil: pen note…** gesture action, or by holding the side button and double-tapping the page with the pen. It tells you whether a note already exists for the current page, the current chapter (the nearest table-of-contents entry) and the book
+- **Scratchpad**: the last row of the chooser opens the scratchpad, one note shared by every book and kept in KOReader's settings folder as `pencil_scratchpad.lua`. It is not listed with the book's notes and never exported
 - **Browsing**: **Browse pen notes** in the Pencil menu, **Browse all pen notes** in the chooser, or the **Pencil: browse pen notes** gesture action list every pen note of the book in reading order, book note first, with the page number on the right. Tap a note to open it and closing the canvas returns to the list; long-press a note to go to its place in the book, to export it or to delete it
 - **Exporting**: **Export pen notes** in the Pencil menu writes every note of the book as one PDF (one page per note page) or as one PNG image per page. A single note is exported from the browser's long-press menu or from **Export note…** in the canvas menu. Pages are rendered as they look on the canvas, title line and highlighted text included, at the screen's physical size. Files go to `notes/<book>/` at the top of the device's storage (`/mnt/onboard/notes/` on a Kobo) unless **Notes folder** in that submenu points the root elsewhere, and are named after the note: `All notes.pdf`, `Page 12.pdf`, `Chapter - Title - p01.png`
 - **Highlight note**: long-press a highlight and tap **Pen note** next to **Note**; it is also in the **…** menu. On a fresh text selection, **Pen note** in the selection menu highlights the text first and then opens the canvas. The highlighted text is shown at the top of the note's first page, and a highlight that has a pen note shows a small pencil glyph in the margin, next to KOReader's own note mark. On ZenOS the selection menu shows plugin buttons only with *Show other items* enabled under *Highlight / Lookup*

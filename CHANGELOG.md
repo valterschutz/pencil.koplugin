@@ -151,6 +151,18 @@ Fork of [mysticknits/pencil.koplugin](https://github.com/mysticknits/pencil.kopl
   them. `noteExportPlan` (ordered notes + unique labels) backs both and the
   menu exports.
 
+## 2026-09-23 (feat/scratchpad)
+
+- Scratchpad: a pen note shared by every book, opened from the last row
+  of the "Pen note…" chooser or the "Pencil: scratchpad" gesture action.
+  It is a one-note store of its own (anchor kind `scratchpad`,
+  `Notes.hasLocation` false like the book note) saved as
+  `pencil_scratchpad.lua` in KOReader's settings folder and loaded on
+  demand, so it never enters the book's store, browser or exports; its
+  canvas has no "Export note…" row. `readNoteStore`/`writeNoteStore` now
+  back both stores, `noteStore(anchor)`/`saveNotesOf(note)` route by
+  anchor kind.
+
 ## Planned
 
 - Nothing queued.

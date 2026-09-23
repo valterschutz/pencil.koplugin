@@ -1,6 +1,7 @@
 --[[--
 Pen notes: blank canvases attached to the book, a chapter, a page or a
-highlight. Pure functions over plain tables so the store can be tested
+highlight, plus the scratchpad, one note shared by every book and kept in
+its own store. Pure functions over plain tables so the store can be tested
 without KOReader.
 
 A note is { anchor = <anchor>, datetime = <os.time()>, pages = { <page>, ... } }
@@ -8,6 +9,7 @@ with at least one page; a page is { strokes = {...} }. Version 1 stored a
 single flat strokes array, which loads as a one-page note.
 Anchor shapes:
   book:      { kind = "book" }
+  scratchpad:{ kind = "scratchpad" }
   chapter:   { kind = "chapter", page = N, xpointer = str|nil, title = str }
              (page/xpointer identify the TOC entry)
   page:      { kind = "page", page = N, xpointer = str|nil }
@@ -26,16 +28,25 @@ Notes.KIND_BOOK = "book"
 Notes.KIND_CHAPTER = "chapter"
 Notes.KIND_PAGE = "page"
 Notes.KIND_HIGHLIGHT = "highlight"
+Notes.KIND_SCRATCHPAD = "scratchpad"
 
 local KINDS = {
     [Notes.KIND_BOOK] = true,
     [Notes.KIND_CHAPTER] = true,
     [Notes.KIND_PAGE] = true,
     [Notes.KIND_HIGHLIGHT] = true,
+    [Notes.KIND_SCRATCHPAD] = true,
 }
 
 function Notes.isKind(kind)
     return KINDS[kind] == true
+end
+
+--- Whether notes of this kind belong to a place in the book. The book
+-- note and the scratchpad do not.
+function Notes.hasLocation(kind)
+    assert(Notes.isKind(kind), "unknown anchor kind: " .. tostring(kind))
+    return kind ~= Notes.KIND_BOOK and kind ~= Notes.KIND_SCRATCHPAD
 end
 
 function Notes.assertAnchor(anchor)
@@ -44,7 +55,7 @@ function Notes.assertAnchor(anchor)
     if anchor.kind == Notes.KIND_HIGHLIGHT then
         assert(type(anchor.datetime) == "string" and anchor.datetime ~= "",
             "highlight anchor needs the annotation datetime")
-    elseif anchor.kind ~= Notes.KIND_BOOK then
+    elseif Notes.hasLocation(anchor.kind) then
         assert(anchor.page ~= nil or anchor.xpointer ~= nil,
             anchor.kind .. " anchor needs a page or an xpointer")
     end
@@ -134,7 +145,7 @@ function Notes.sameAnchor(a, b, resolve_page)
     Notes.assertAnchor(b)
     resolve_page = resolve_page or identityPage
     if a.kind ~= b.kind then return false end
-    if a.kind == Notes.KIND_BOOK then
+    if not Notes.hasLocation(a.kind) then
         return true
     elseif a.kind == Notes.KIND_HIGHLIGHT then
         return a.datetime == b.datetime
@@ -282,28 +293,31 @@ function Notes.fromSaved(data, convert)
 end
 
 local KIND_RANK = {
+    [Notes.KIND_SCRATCHPAD] = 0,
     [Notes.KIND_BOOK] = 1,
     [Notes.KIND_CHAPTER] = 2,
     [Notes.KIND_PAGE] = 3,
     [Notes.KIND_HIGHLIGHT] = 4,
 }
 
---- The notes in reading order for a browser: the book note first, then by
--- location page ascending, with chapter before page before highlight notes
--- of the same page, oldest first among equals. locate(note) gives the page
--- the note belongs to in the current layout, or nil when unknown; located
--- notes come before unlocated ones. The store itself is left untouched.
+--- The notes in reading order for a browser: the notes without a location
+-- (scratchpad, book note) first, then by location page ascending, with
+-- chapter before page before highlight notes of the same page, oldest
+-- first among equals. locate(note) gives the page the note belongs to in
+-- the current layout, or nil when unknown; located notes come before
+-- unlocated ones. The store itself is left untouched.
 function Notes.browseOrder(store, locate)
     assert(type(locate) == "function", "locate must be a function")
     local keyed = {}
     for i, note in ipairs(store.notes) do
-        local page = note.anchor.kind ~= Notes.KIND_BOOK and locate(note) or nil
+        local page = Notes.hasLocation(note.anchor.kind) and locate(note) or nil
         assert(page == nil or type(page) == "number", "locate must return a page number or nil")
         keyed[i] = { note = note, page = page, index = i }
     end
     table.sort(keyed, function(a, b)
         local ra, rb = KIND_RANK[a.note.anchor.kind], KIND_RANK[b.note.anchor.kind]
-        if (ra == 1) ~= (rb == 1) then return ra == 1 end
+        local la, lb = Notes.hasLocation(a.note.anchor.kind), Notes.hasLocation(b.note.anchor.kind)
+        if la ~= lb then return lb end
         if (a.page == nil) ~= (b.page == nil) then return a.page ~= nil end
         if a.page ~= b.page then return a.page < b.page end
         if ra ~= rb then return ra < rb end

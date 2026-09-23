@@ -62,6 +62,10 @@ a KOReader stylus plugin, run on a Kobo Libra Colour (Kobo_monza) with the Kobo 
   `ui.pencil`. Both read the notes root from the `notes_export_dir` setting
   and name the book's subfolder the same way (`Export.safeName` of the file
   stem); keep those two in sync.
+- The scratchpad (`pencil_scratchpad.lua` in KOReader's settings folder)
+  is deliberately outside the book store, so `noteExportPlan` and hence
+  both plugins' exports never see it. Keep it that way: it holds notes
+  from every book.
 
 ## Planned features
 

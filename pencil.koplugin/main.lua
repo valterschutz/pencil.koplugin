@@ -181,6 +181,8 @@ local Pencil = InputContainer:extend{
     -- Pen notes: blank canvases attached to the book, a chapter, a page or a highlight
     notes = nil,          -- Notes store, see lib/notes.lua
     notes_loaded = false, -- set true once the sidecar file was read (or found absent)
+    scratchpad = nil,     -- Notes store holding the one scratchpad note shared by every book
+    scratchpad_loaded = false,  -- as notes_loaded, for the scratchpad file
     note_canvas = nil,    -- open NoteCanvas widget, or nil
     note_browser = nil,   -- open note browser (a CenterContainer holding a Menu), or nil
     note_marker = nil,    -- { page = <current page>, shown = bool }, see Pencil:renderNoteMarker
@@ -309,6 +311,12 @@ function Pencil:init()
         title = _("Pencil: browse pen notes"),
         reader = true,
     })
+    Dispatcher:registerAction("pencil_scratchpad", {
+        category = "none",
+        event = "PencilScratchpad",
+        title = _("Pencil: scratchpad"),
+        reader = true,
+    })
     Dispatcher:registerAction("pencil_undo", {
         category = "none",
         event = "PencilUndo",
@@ -389,6 +397,11 @@ end
 
 function Pencil:onPencilNoteMenu()
     self:showNoteMenu()
+    return true
+end
+
+function Pencil:onPencilScratchpad()
+    self:openNote(self:scratchpadAnchor())
     return true
 end
 
@@ -1354,7 +1367,7 @@ function Pencil:addToMainMenu(menu_items)
             },
             {
                 text = _("Pen note…"),
-                help_text = _("Open a blank canvas for handwritten notes attached to this page, this chapter or the whole book. Notes on a highlight are opened from the highlight menu. Notes are stored next to the book. The \"Pencil: pen note…\" gesture action opens the same chooser."),
+                help_text = _("Open a blank canvas for handwritten notes attached to this page, this chapter or the whole book, or the scratchpad, one note shared by every book. Notes on a highlight are opened from the highlight menu. Notes are stored next to the book, the scratchpad in KOReader's settings folder. The \"Pencil: pen note…\" gesture action opens the same chooser."),
                 callback = function()
                     self:showNoteMenu()
                 end,
@@ -4458,16 +4471,54 @@ end
 
 -- Pen notes ------------------------------------------------------------------
 -- Blank canvases stored in <sidecar>/pencil_notes.lua and attached to the
--- book, the current chapter, the current page or a highlight. The store and
--- the anchor rules live in lib/notes.lua, the widget in lib/notecanvas.lua.
+-- book, the current chapter, the current page or a highlight, plus the
+-- scratchpad: one note shared by every book, kept in its own store in
+-- KOReader's settings folder and never exported. The store and the anchor
+-- rules live in lib/notes.lua, the widget in lib/notecanvas.lua.
 
 local NOTE_TITLE_MAX_CHARS = 40
 local NOTE_BROWSER_SNIPPET_MAX_CHARS = 60  -- of the highlighted text in a browser row
+local SCRATCHPAD_FILE = "pencil_scratchpad.lua"
 
 function Pencil:getNotesFilePath()
     local sidecar_dir = self.ui and self.ui.doc_settings and self.ui.doc_settings.doc_sidecar_dir
     if not sidecar_dir then return nil end
     return sidecar_dir .. "/pencil_notes.lua"
+end
+
+function Pencil:getScratchpadFilePath()
+    return DataStorage:getSettingsDir() .. "/" .. SCRATCHPAD_FILE
+end
+
+-- The store saved at filepath, an empty one when there is no file, or nil
+-- when the file exists but cannot be read.
+function Pencil:readNoteStore(filepath, what)
+    assert(type(filepath) == "string", "readNoteStore needs a file path")
+    if not lfs.attributes(filepath, "mode") then
+        return Notes.newStore()
+    end
+    local ok, data = pcall(dofile, filepath)
+    if not ok then
+        logger.warn("Pencil: failed to load", what, "from", filepath, "error:", data)
+        return nil
+    end
+    local store = Notes.fromSaved(data, function(saved) return self:strokeFromSaved(saved) end)
+    logger.info("Pencil: loaded", #store.notes, what, "from", filepath)
+    return store
+end
+
+function Pencil:writeNoteStore(store, filepath, what)
+    assert(type(store) == "table" and type(store.notes) == "table", "writeNoteStore needs a store")
+    assert(type(filepath) == "string", "writeNoteStore needs a file path")
+    local data = Notes.toSaveable(store, function(stroke) return self:strokeToSaveable(stroke) end)
+    local f, open_err = io.open(filepath, "w")
+    if not f then
+        logger.err("Pencil: failed to open", what, "file for writing:", filepath, "error:", open_err)
+        return
+    end
+    f:write("return " .. require("dump")(data))
+    f:close()
+    logger.info("Pencil: saved", #data.notes, what, "to", filepath)
 end
 
 function Pencil:loadNotes()
@@ -4478,18 +4529,10 @@ function Pencil:loadNotes()
         logger.warn("Pencil: no sidecar dir available for loading pen notes")
         return
     end
-    if not lfs.attributes(filepath, "mode") then
-        self.notes_loaded = true
-        return
-    end
-    local ok, data = pcall(dofile, filepath)
-    if not ok then
-        logger.warn("Pencil: failed to load pen notes from", filepath, "error:", data)
-        return
-    end
-    self.notes = Notes.fromSaved(data, function(saved) return self:strokeFromSaved(saved) end)
+    local store = self:readNoteStore(filepath, "pen notes")
+    if not store then return end
+    self.notes = store
     self.notes_loaded = true
-    logger.info("Pencil: loaded", #self.notes.notes, "pen notes from", filepath)
 end
 
 function Pencil:saveNotes()
@@ -4507,15 +4550,41 @@ function Pencil:saveNotes()
     if not ok and err ~= "File exists" then
         logger.warn("Pencil: failed to create sidecar dir:", err)
     end
-    local data = Notes.toSaveable(self.notes, function(stroke) return self:strokeToSaveable(stroke) end)
-    local f, open_err = io.open(filepath, "w")
-    if not f then
-        logger.err("Pencil: failed to open pen notes file for writing:", filepath, "error:", open_err)
+    self:writeNoteStore(self.notes, filepath, "pen notes")
+end
+
+function Pencil:loadScratchpad()
+    self.scratchpad = Notes.newStore()
+    local store = self:readNoteStore(self:getScratchpadFilePath(), "scratchpad notes")
+    if not store then return end
+    self.scratchpad = store
+    self.scratchpad_loaded = true
+end
+
+function Pencil:saveScratchpad()
+    if not self.scratchpad_loaded then
+        logger.warn("Pencil: refusing to save a scratchpad that was never loaded")
         return
     end
-    f:write("return " .. require("dump")(data))
-    f:close()
-    logger.info("Pencil: saved", #data.notes, "pen notes to", filepath)
+    self:writeNoteStore(self.scratchpad, self:getScratchpadFilePath(), "scratchpad notes")
+end
+
+-- The store a note with this anchor lives in: the scratchpad has its own,
+-- every other note belongs to the book.
+function Pencil:noteStore(anchor)
+    Notes.assertAnchor(anchor)
+    if anchor.kind == Notes.KIND_SCRATCHPAD then
+        return self.scratchpad
+    end
+    return self.notes
+end
+
+function Pencil:saveNotesOf(note)
+    if note.anchor.kind == Notes.KIND_SCRATCHPAD then
+        self:saveScratchpad()
+    else
+        self:saveNotes()
+    end
 end
 
 -- Loads on demand and tells the user when the store is unusable, so a note
@@ -4533,6 +4602,26 @@ function Pencil:ensureNotesLoaded()
     return true
 end
 
+function Pencil:ensureScratchpadLoaded()
+    if not self.scratchpad_loaded then
+        self:loadScratchpad()
+    end
+    if not self.scratchpad_loaded then
+        UIManager:show(InfoMessage:new{
+            text = _("The scratchpad could not be loaded, so it would not be saved. See the log for details."),
+        })
+        return false
+    end
+    return true
+end
+
+function Pencil:ensureStoreLoaded(anchor)
+    if anchor.kind == Notes.KIND_SCRATCHPAD then
+        return self:ensureScratchpadLoaded()
+    end
+    return self:ensureNotesLoaded()
+end
+
 -- Page of a page anchor in the current layout. Rolling documents re-derive
 -- it from the stored xpointer because page numbers move with the layout.
 function Pencil:resolveAnchorPage(anchor)
@@ -4546,6 +4635,10 @@ end
 
 function Pencil:bookAnchor()
     return { kind = Notes.KIND_BOOK }
+end
+
+function Pencil:scratchpadAnchor()
+    return { kind = Notes.KIND_SCRATCHPAD }
 end
 
 function Pencil:pageAnchor()
@@ -4610,18 +4703,20 @@ function Pencil:liveAnchor(note)
     return note.anchor
 end
 
--- Page the note belongs to in the current layout, or nil for the book note
--- and for notes whose place cannot be determined.
+-- Page the note belongs to in the current layout, or nil for the book note,
+-- the scratchpad and notes whose place cannot be determined.
 function Pencil:noteLocation(note)
     local anchor = self:liveAnchor(note)
-    if anchor.kind == Notes.KIND_BOOK then return nil end
+    if not Notes.hasLocation(anchor.kind) then return nil end
     local page = self:resolveAnchorPage(anchor)
     return type(page) == "number" and page or nil
 end
 
 function Pencil:noteTitle(note)
     local anchor = note.anchor
-    if anchor.kind == Notes.KIND_BOOK then
+    if anchor.kind == Notes.KIND_SCRATCHPAD then
+        return _("Scratchpad")
+    elseif anchor.kind == Notes.KIND_BOOK then
         return _("Book note")
     elseif anchor.kind == Notes.KIND_CHAPTER then
         return T(_("Chapter: %1"), anchor.title ~= "" and anchor.title or _("untitled"))
@@ -4642,8 +4737,10 @@ function Pencil:noteHeader(anchor)
 end
 
 function Pencil:findNote(anchor)
-    if not (anchor and self.notes) then return nil end
-    return Notes.find(self.notes, anchor, function(a) return self:resolveAnchorPage(a) end)
+    if not anchor then return nil end
+    local store = self:noteStore(anchor)
+    if not store then return nil end
+    return Notes.find(store, anchor, function(a) return self:resolveAnchorPage(a) end)
 end
 
 -- Whether the page being shown has a page note. Cached per page because a
@@ -4810,17 +4907,20 @@ end
 
 -- Opens the canvas for the anchor, creating the note if there is none. An
 -- untouched new note is dropped again when the canvas closes. on_closed, if
--- given, runs once the canvas is gone and the store is saved.
+-- given, runs once the canvas is gone and the store is saved. The
+-- scratchpad's canvas has no export row: the scratchpad is never exported.
 function Pencil:openNote(anchor, on_closed)
     assert(anchor, "openNote needs an anchor")
     assert(on_closed == nil or type(on_closed) == "function", "on_closed must be a function")
     if self.note_canvas then return end
-    if not self:ensureNotesLoaded() then return end
+    if not self:ensureStoreLoaded(anchor) then return end
 
+    local store = self:noteStore(anchor)
     local note = self:findNote(anchor)
     if not note then
-        note = Notes.add(self.notes, Notes.newNote(anchor, os.time()))
+        note = Notes.add(store, Notes.newNote(anchor, os.time()))
     end
+    local exportable = anchor.kind ~= Notes.KIND_SCRATCHPAD
     -- The canvas needs raw stylus input even when page drawing is disabled
     self:setupStylusCallback()
     self.note_canvas = NoteCanvas:new{
@@ -4833,21 +4933,21 @@ function Pencil:openNote(anchor, on_closed)
         on_delete = function(canvas)
             self:confirmDeleteNote(note, canvas)
         end,
-        on_export = function(canvas)
+        on_export = exportable and function(canvas)
             canvas:prunePages()
             self:showNoteExportMenu(note)
-        end,
+        end or nil,
         on_close = function(_, changed)
             self.note_canvas = nil
             if not self.touch_zones_registered then
                 self:teardownStylusCallback()
             end
             if Notes.isEmpty(note) then
-                Notes.remove(self.notes, note)
+                Notes.remove(store, note)
             end
             self:invalidateNoteMarker()
             if changed then
-                self:saveNotes()
+                self:saveNotesOf(note)
             end
             if on_closed then
                 on_closed()
@@ -4878,11 +4978,15 @@ function Pencil:confirmDeleteNote(note, canvas)
     })
 end
 
--- Chooser between a page, chapter and book note. Reached from the Pencil
--- menu and from the "Pencil: pen note…" gesture action.
+-- Chooser between a page, chapter and book note and the scratchpad.
+-- Reached from the Pencil menu and from the "Pencil: pen note…" gesture
+-- action. A scratchpad that cannot be loaded only disables its row.
 function Pencil:showNoteMenu()
     if self.note_canvas then return end
     if not self:ensureNotesLoaded() then return end
+    if not self.scratchpad_loaded then
+        self:loadScratchpad()
+    end
 
     local dialog
     local function row(anchor, new_text, open_text, disabled_text)
@@ -4914,6 +5018,10 @@ function Pencil:showNoteMenu()
             row(self:bookAnchor(),
                 _("New note for this book"),
                 _("Open note for this book")),
+            row(self.scratchpad_loaded and self:scratchpadAnchor() or nil,
+                _("New scratchpad (shared by all books)"),
+                _("Open scratchpad (shared by all books)"),
+                _("The scratchpad could not be loaded")),
             {{
                 text = _("Browse all pen notes"),
                 enabled = #self.notes.notes > 0,
@@ -4956,7 +5064,7 @@ function Pencil:gotoNoteLocation(note)
         else
             target = anchor.page
         end
-    elseif anchor.kind ~= Notes.KIND_BOOK then
+    elseif Notes.hasLocation(anchor.kind) then
         target = self.ui.rolling and anchor.xpointer or anchor.page
     end
     if target == nil then return false end
@@ -5094,6 +5202,7 @@ end
 -- quotes and colons that file systems refuse.
 function Pencil:noteExportLabel(note)
     local anchor = self:liveAnchor(note)
+    assert(anchor.kind ~= Notes.KIND_SCRATCHPAD, "the scratchpad is not exported")
     if anchor.kind == Notes.KIND_BOOK then
         return _("Book note")
     elseif anchor.kind == Notes.KIND_CHAPTER then
@@ -5528,7 +5637,7 @@ function Pencil:onSuspend()
     self:flushPendingCaptures()
     if self.note_canvas and self.note_canvas.changed then
         self.note_canvas:penUp()
-        self:saveNotes()
+        self:saveNotesOf(self.note_canvas.note)
     end
 end
 
