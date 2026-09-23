@@ -79,8 +79,8 @@ local IMAGE_CAPTURE_DEBOUNCE_S = 4       -- seconds after last stroke before cap
 local IMAGE_BADGE_SIZE = 48              -- on-page badge edge (px) when annotation is stale
 local IMAGE_BADGE_HIT_PAD = 32           -- extra pixels around badge for tap hit-test
 local IMAGE_BADGE_MARGIN_GAP = 5         -- gap from text/screen edge for margin badge
-local NOTE_MARKER_SIZE = 48              -- edge (px) of the corner triangle on pages with a pen note
-local NOTE_MARKER_GRAY = 0xBB            -- luminance of that triangle; light so it stays unobtrusive
+local CORNER_MARKER_SIZE = 48            -- edge (px) of the corner triangles: page note (top right), finger mode (bottom right)
+local CORNER_MARKER_GRAY = 0xBB          -- luminance of those triangles; light so they stay unobtrusive
 local HIGHLIGHT_NOTE_MARK_GLYPH = "\239\129\128"  -- U+F040 pencil, the glyph KOReader uses for its own note side mark
 local HIGHLIGHT_NOTE_MARK_FONT_SIZE = 14
 local HIGHLIGHT_NOTE_MARK_GAP = 3          -- px (unscaled) between KOReader's note mark and the pencil
@@ -406,6 +406,7 @@ function Pencil:setInputMode(mode)
     self.input_mode = mode
     self:saveSettings()
     logger.dbg("Pencil: input mode set to", mode)
+    self:refreshFingerModeMarker()
     UIManager:show(InfoMessage:new{
         text = mode == MODE_FINGER and _("Finger mode") or _("Pen mode"),
         timeout = 0.5,
@@ -4220,6 +4221,7 @@ function Pencil:paintTo(bb, x, y)
 
     self:renderNoteMarker(bb, page)
     self:renderHighlightNoteMarks(bb)
+    self:renderFingerModeMarker(bb)
 
     -- Render current stroke being drawn (only if on current page)
     if self.current_stroke and self.current_stroke.page == page then
@@ -4673,16 +4675,44 @@ function Pencil:renderHighlightNoteMarks(bb)
     end
 end
 
--- A small light-gray triangle in the top-right corner marks pages that have
--- a page note. `page` is the current page as computed by paintTo.
+-- Paints a light-gray right triangle whose right angle sits in the
+-- top-right (bottom = false) or bottom-right (bottom = true) screen corner.
+local function paintCornerMarker(bb, bottom)
+    local sw, sh = Screen:getWidth(), Screen:getHeight()
+    local color = Blitbuffer.Color8(CORNER_MARKER_GRAY)
+    for row = 0, CORNER_MARKER_SIZE - 1 do
+        local width = CORNER_MARKER_SIZE - row
+        local y = bottom and (sh - 1 - row) or row
+        bb:paintRectRGB32(sw - width, y, width, 1, color)
+    end
+end
+
+-- A small triangle in the top-right corner marks pages that have a page
+-- note. `page` is the current page as computed by paintTo.
 function Pencil:renderNoteMarker(bb, page)
     if not self:currentPageHasNote(page) then return end
-    local sw = Screen:getWidth()
-    local color = Blitbuffer.Color8(NOTE_MARKER_GRAY)
-    for row = 0, NOTE_MARKER_SIZE - 1 do
-        local width = NOTE_MARKER_SIZE - row
-        bb:paintRectRGB32(sw - width, row, width, 1, color)
-    end
+    paintCornerMarker(bb, false)
+end
+
+-- The same triangle in the bottom-right corner shows that finger mode is
+-- on, so a pen tip that does not draw is not mistaken for a broken pen.
+-- Painted by the reader and by an open note canvas alike.
+function Pencil:renderFingerModeMarker(bb)
+    if not self:isFingerMode() then return end
+    paintCornerMarker(bb, true)
+end
+
+-- Repaints the bottom-right corner of whatever is showing (the note canvas
+-- if one is open, else the reader) after the input mode changed. Only the
+-- corner is refreshed; the "Finger mode" toast repaints its own area.
+function Pencil:refreshFingerModeMarker()
+    local widget = self.note_canvas or (self.ui and self.ui.dialog)
+    if not widget then return end
+    local sw, sh = Screen:getWidth(), Screen:getHeight()
+    UIManager:setDirty(widget, "ui", Geom:new{
+        x = sw - CORNER_MARKER_SIZE, y = sh - CORNER_MARKER_SIZE,
+        w = CORNER_MARKER_SIZE, h = CORNER_MARKER_SIZE,
+    })
 end
 
 -- Opens the canvas for the anchor, creating the note if there is none. An

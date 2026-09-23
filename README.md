@@ -17,7 +17,7 @@ If you resize your book while reading it, your annotations will be WONKY. This i
 - **Pen tip**: Draw annotations on your ebooks
 - **Eraser end**: Flip your stylus over to erase strokes instantly
 - **Highlighter**: Hold the stylus side button and drag to highlight; hold the side button and tap the page to toggle pencil/eraser; hold it and double-tap to open the pen note menu
-- **Finger mode**: Treat the pen tip as a finger so taps, swipes and long-presses go to KOReader instead of drawing. The eraser end still erases and holding the side button still highlights. Set **Side button tap** to *finger/pen mode* to switch modes by holding the side button and tapping the page
+- **Finger mode**: Treat the pen tip as a finger so taps, swipes and long-presses go to KOReader instead of drawing. The eraser end still erases and holding the side button still highlights. Set **Side button tap** to *finger/pen mode* to switch modes by holding the side button and tapping the page. A light-gray triangle in the bottom-right corner of the page, and of an open pen note, shows that finger mode is on
 - **Pen notes**: Open a blank canvas for handwritten notes attached to the current page, the current chapter, the whole book, or a highlight. A note can span several pages: swipe to turn them, swipe past the last one to add a page. Pen, side-button highlighter and eraser end work on the canvas as on a page. Close it with the X in the corner
 - **Swap Eraser/Highlighter**: Reassign which side button acts as eraser vs. highlighter from the menu
 - **Undo**: Undo your last stroke or eraser action

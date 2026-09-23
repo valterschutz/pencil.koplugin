@@ -129,6 +129,8 @@ local function newPencil()
         drawLineSegment = function(self) self.segments = self.segments + 1 end,
         drawHighlighterSegment = function(self) self.highlighter_segments = self.highlighter_segments + 1 end,
         renderStroke = function() end,
+        marker_paints = 0,
+        renderFingerModeMarker = function(self) self.marker_paints = self.marker_paints + 1 end,
     }
 end
 
@@ -575,6 +577,16 @@ describe("NoteCanvas", function()
             assert.equals(1, canvas.header_widget.painted)
             canvas:onCloseWidget()
             assert.is_true(canvas.header_widget.freed)
+        end)
+    end)
+
+    describe("finger mode marker", function()
+        it("is painted by the plugin on every repaint", function()
+            local canvas = newCanvas()
+            canvas:paintTo(screen.bb, 0, 0)
+            assert.equals(1, canvas.pencil.marker_paints)
+            canvas:paintTo(screen.bb, 0, 0)
+            assert.equals(2, canvas.pencil.marker_paints)
         end)
     end)
 end)

@@ -93,6 +93,15 @@ Fork of [mysticknits/pencil.koplugin](https://github.com/mysticknits/pencil.kopl
   from the list ReaderView recorded for the frame; the set of noted
   highlights is cached with the page marker and dropped with it.
 
+## 2026-09-23 (feat/finger-mode-indicator)
+
+- While finger mode is on, the reader shows a light-gray triangle in the
+  bottom-right corner, the mirror image of the page-note marker in the
+  top-right corner. Switching modes refreshes just that corner, so the
+  triangle appears and disappears together with the "Finger mode" toast.
+  An open note canvas paints the same triangle, and a mode switch from its
+  menu or by side button hold + tap refreshes its corner the same way.
+
 ## Planned
 
 - Browsing all pen notes of a book (list, open, go to location).

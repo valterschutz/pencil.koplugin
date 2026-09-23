@@ -53,7 +53,7 @@ local HEADER_FONT_SIZE = 20
 local HEADER_MAX_SCREEN_FRACTION = 1 / 3  -- a longer header is cut with an ellipsis
 
 local NoteCanvas = InputContainer:extend{
-    pencil = nil,        -- Pencil plugin: tool settings, input mode, stroke rendering, coordinate transform
+    pencil = nil,        -- Pencil plugin: tool settings, input mode, stroke and mode-marker rendering, coordinate transform
     note = nil,          -- Notes record; its pages are edited in place
     title = "",
     header = nil,        -- text shown under the title bar on the first page, or nil
@@ -169,6 +169,7 @@ function NoteCanvas:paintTo(bb, x, y)
     if self.current_stroke then
         self.pencil:renderStroke(bb, self.current_stroke)
     end
+    self.pencil:renderFingerModeMarker(bb)
 end
 
 function NoteCanvas:paintHeader(bb, x, y)
