@@ -67,6 +67,7 @@ function NoteCanvas:init()
     self.changed = false
     self.current_stroke = nil
     self.pen_down = false
+    self.title_bar_contact = false
     self.dirty_region = nil
     self.last_refresh_time = 0
 
@@ -87,13 +88,26 @@ function NoteCanvas:paintTo(bb, x, y)
 end
 
 -- Stylus entry point. slot = {id, x, y, tool}; id < 0 means the tip lifted.
--- Always returns true so the pen never reaches gesture detection.
+-- Returns true to keep the pen out of gesture detection. A contact that
+-- starts on the title bar is handed to gesture detection instead, lift
+-- included, so the pen can tap the X and the menu icon.
 function NoteCanvas:handleStylusSlot(slot)
     if not (slot.id and slot.id >= 0) then
+        if self.title_bar_contact then
+            self.title_bar_contact = false
+            return false
+        end
         self:penUp()
         return true
     end
+    if self.title_bar_contact then
+        return false
+    end
     local x, y = self.pencil:transformCoordinates(slot.x or 0, slot.y or 0)
+    if not self.pen_down and y < self.canvas_top then
+        self.title_bar_contact = true
+        return false
+    end
     local swap = self.pencil.swap_eraser_and_highlighter
     local eraser_type = swap and TOOL_TYPE_HIGHLIGHTER or TOOL_TYPE_ERASER
     local highlighter_type = swap and TOOL_TYPE_ERASER or TOOL_TYPE_HIGHLIGHTER
