@@ -40,6 +40,16 @@ local TOOL_PEN = "pen"
 local TOOL_HIGHLIGHTER = "highlighter"
 local TOOL_ERASER = "eraser"
 
+-- Input modes. In finger mode every stylus contact is handed to KOReader's
+-- normal touch handling untouched, as if it were a finger.
+local MODE_PEN = "pen"
+local MODE_FINGER = "finger"
+
+-- What a quick side-button press does
+local SIDE_BUTTON_TAP_TOOL = "tool"  -- toggle pencil/eraser
+local SIDE_BUTTON_TAP_MODE = "mode"  -- toggle finger/pen mode
+local SIDE_BUTTON_TAP_MAX_MS = 500   -- held longer than this is not a tap
+
 -- Color picker trigger settings
 local COLOR_PICKER_DELAY_MS = 500  -- How long pen must be held still (milliseconds)
 local COLOR_PICKER_TOLERANCE_PIXELS = 15  -- How many pixels pen can move while "still"
@@ -119,8 +129,11 @@ local Pencil = InputContainer:extend{
         },
     },
 
-    -- Side button state
+    -- Input mode and side button state
+    input_mode = MODE_PEN,
+    side_button_tap = SIDE_BUTTON_TAP_TOOL,
     side_button_down = false,
+    side_button_press_time = nil,
     side_button_used_for_highlight = false,  -- Track if button was used during a stroke
 
     -- Color picker state (triggered by holding pen within 5 pixels for 5 seconds)
@@ -233,6 +246,12 @@ function Pencil:init()
         title = _("Pencil: select eraser"),
         reader = true,
     })
+    Dispatcher:registerAction("pencil_toggle_input_mode", {
+        category = "none",
+        event = "PencilToggleInputMode",
+        title = _("Pencil: toggle finger/pen mode"),
+        reader = true,
+    })
     Dispatcher:registerAction("pencil_undo", {
         category = "none",
         event = "PencilUndo",
@@ -310,6 +329,50 @@ function Pencil:onPencilUndo()
     return true
 end
 
+function Pencil:onPencilToggleInputMode()
+    self:toggleInputMode()
+    return true
+end
+
+function Pencil:isFingerMode()
+    return self.input_mode == MODE_FINGER
+end
+
+function Pencil:setInputMode(mode)
+    assert(mode == MODE_PEN or mode == MODE_FINGER, "unknown input mode: " .. tostring(mode))
+    if mode == self.input_mode then return end
+
+    -- Leaving pen mode with the pen still on the screen: close out whatever
+    -- the raw stylus path was doing, since it will not see the pen lift.
+    if mode == MODE_FINGER and self.pen_down then
+        self.pen_down = false
+        if self.erasing then
+            self.erasing = false
+            if self.eraser_deleted and #self.eraser_deleted > 0 then
+                table.insert(self.undo_stack, { type = "delete", strokes = self.eraser_deleted })
+                self:saveStrokes()
+            end
+            self.eraser_deleted = nil
+            UIManager:setDirty(self.view, "ui")
+        else
+            self:cancelColorPickerTimer()
+            self:endRawStroke()
+        end
+    end
+
+    self.input_mode = mode
+    self:saveSettings()
+    logger.dbg("Pencil: input mode set to", mode)
+    UIManager:show(InfoMessage:new{
+        text = mode == MODE_FINGER and _("Finger mode") or _("Pen mode"),
+        timeout = 0.5,
+    })
+end
+
+function Pencil:toggleInputMode()
+    self:setInputMode(self:isFingerMode() and MODE_PEN or MODE_FINGER)
+end
+
 -- Setup stylus callback for lowest latency pen capture
 -- Uses the new Input:registerStylusCallback() API that intercepts stylus events
 -- before they reach the gesture detector
@@ -361,6 +424,9 @@ function Pencil:handleStylusSlot(input, slot)
 
     -- Don't capture pen input when a menu or overlay is on top of the reader
     if self:isOverlayActive() then return false end
+
+    -- Finger mode: the stylus is a finger, let the gesture detector have it
+    if self:isFingerMode() then return false end
 
     -- Detect eraser end via slot.tool BEFORE key events arrive
     -- This handles the timing issue where stylus callback fires before key events
@@ -1003,6 +1069,9 @@ function Pencil:loadSettings()
     self.experimental_pen_width = settings.experimental_pen_width or false
     self.experimental_color_picker = settings.experimental_color_picker or false
     self.experimental_text_highlight = settings.experimental_text_highlight or false
+    self.input_mode = settings.input_mode == MODE_FINGER and MODE_FINGER or MODE_PEN
+    self.side_button_tap = settings.side_button_tap == SIDE_BUTTON_TAP_MODE
+        and SIDE_BUTTON_TAP_MODE or SIDE_BUTTON_TAP_TOOL
     -- Load pen color by name and look up the actual color value
     local color_name = settings.pen_color_name
     if color_name then
@@ -1039,6 +1108,8 @@ function Pencil:saveSettings()
         pen_color_name = self.tool_settings[TOOL_PEN].color_name,
         swap_eraser_and_highlighter = self.swap_eraser_and_highlighter,
         pen_width = self.tool_settings[TOOL_PEN].width,
+        input_mode = self.input_mode,
+        side_button_tap = self.side_button_tap,
     })
 end
 
@@ -1087,6 +1158,16 @@ function Pencil:addToMainMenu(menu_items)
                 callback = function()
                     self:onPencilToggleEnabled()
                 end,
+            },
+            {
+                text = _("Finger mode"),
+                help_text = _("Treat the stylus as a finger: taps, swipes and long-presses go to KOReader instead of drawing. Set \"Side button tap\" to finger/pen mode to switch with the stylus button."),
+                checked_func = function()
+                    return self:isFingerMode()
+                end,
+                callback = function()
+                    self:toggleInputMode()
+                end,
                 separator = true,
             },
             {
@@ -1098,6 +1179,34 @@ function Pencil:addToMainMenu(menu_items)
                     self.swap_eraser_and_highlighter = not self.swap_eraser_and_highlighter
                     self:saveSettings()
                 end,
+            },
+            {
+                text = _("Side button tap"),
+                help_text = _("What a quick press of the stylus side button does. Holding it while dragging highlights in pen mode and does nothing in finger mode."),
+                sub_item_table = {
+                    {
+                        text = _("Toggle pencil/eraser"),
+                        radio = true,
+                        checked_func = function()
+                            return self.side_button_tap == SIDE_BUTTON_TAP_TOOL
+                        end,
+                        callback = function()
+                            self.side_button_tap = SIDE_BUTTON_TAP_TOOL
+                            self:saveSettings()
+                        end,
+                    },
+                    {
+                        text = _("Toggle finger/pen mode"),
+                        radio = true,
+                        checked_func = function()
+                            return self.side_button_tap == SIDE_BUTTON_TAP_MODE
+                        end,
+                        callback = function()
+                            self.side_button_tap = SIDE_BUTTON_TAP_MODE
+                            self:saveSettings()
+                        end,
+                    },
+                },
                 separator = true,
             },
             {
@@ -1354,7 +1463,8 @@ Stylus callback: %9
 Pen slot: %10
 Pen down: %11
 
-Side button: tap to toggle pen/eraser, hold+drag to highlight.
+Input mode: %12
+Side button: tap to toggle %13, hold+drag to highlight.
 
 Enable "Input debug mode" to log raw events for diagnosis.
 
@@ -1369,7 +1479,9 @@ Pages with strokes:%8]]),
         pages_info,
         stylus_callback_status,
         tostring(pen_slot),
-        pen_down_status
+        pen_down_status,
+        self.input_mode,
+        self.side_button_tap == SIDE_BUTTON_TAP_MODE and _("finger/pen mode") or _("pencil/eraser")
     )
 
     UIManager:show(InfoMessage:new{
@@ -1379,12 +1491,15 @@ end
 
 -- Handle stylus button press (down event)
 -- Side button behavior:
---   - Hold + drag = temporarily highlight, then return to original tool
---   - Quick press (no drawing while held) = toggle between pen and eraser
+--   - Pen mode, hold + drag = temporarily highlight, then return to original tool
+--   - Finger mode, hold = nothing (the stylus is passed through as a finger)
+--   - Quick press (no drawing while held, released within SIDE_BUTTON_TAP_MAX_MS)
+--     = toggle pencil/eraser or finger/pen mode, per the "Side button tap" setting
 function Pencil:onStylusButtonPress()
     if not self:isEnabled() or self:isOverlayActive() then return false end
 
     self.side_button_down = true
+    self.side_button_press_time = time.now()
     if not self.highlighting then
         self.side_button_used_for_highlight = false
     end
@@ -1399,19 +1514,26 @@ function Pencil:onStylusButtonRelease()
 
     local was_down = self.side_button_down
     self.side_button_down = false
+    local held_ms = self.side_button_press_time and time.to_ms(time.now() - self.side_button_press_time) or 0
+    self.side_button_press_time = nil
 
-    -- If the button was NOT used for highlighting (no drawing while held),
-    -- treat it as a quick press to toggle between pen and eraser
-    if was_down and not self.side_button_used_for_highlight then
-        logger.dbg("Pencil: side button quick press - toggling pen/eraser")
-        self:togglePenEraser()
+    if was_down and not self.side_button_used_for_highlight and held_ms <= SIDE_BUTTON_TAP_MAX_MS then
+        logger.dbg("Pencil: side button tap after", held_ms, "ms")
+        self:onSideButtonTap()
     else
-        -- Was used for highlighting - show brief feedback that we're back to normal
-        logger.dbg("Pencil: highlight complete, back to", self.current_tool)
+        logger.dbg("Pencil: side button held", held_ms, "ms, highlight =", self.side_button_used_for_highlight)
     end
 
     self.side_button_used_for_highlight = false
     return true
+end
+
+function Pencil:onSideButtonTap()
+    if self.side_button_tap == SIDE_BUTTON_TAP_MODE then
+        self:toggleInputMode()
+    else
+        self:togglePenEraser()
+    end
 end
 
 -- Toggle between pen and eraser
@@ -1706,6 +1828,7 @@ end
 -- Handle swipe gestures (block them when drawing mode is active)
 function Pencil:onDrawSwipe(ges)
     if not self:isEnabled() or self:isOverlayActive() then return false end
+    if self:isFingerMode() then return false end
 
     -- If raw input detected pen, block swipe to prevent page turns
     if self.pen_down then return true end
@@ -1721,6 +1844,7 @@ end
 -- Handle tip long press (hold gesture)
 function Pencil:onDrawHold(ges)
     if not self:isEnabled() or self:isOverlayActive() then return false end
+    if self:isFingerMode() then return false end
 
     -- If raw input detected pen, block hold to prevent reader highlight mode
     if self.pen_down then return true end
@@ -2380,6 +2504,7 @@ end
 -- This handler blocks gestures and is a backup if raw input not working
 function Pencil:onDrawTouch(ges)
     if not self:isEnabled() or self:isOverlayActive() then return false end
+    if self:isFingerMode() then return false end
 
     -- Check if this is a finger touch (not pen) - let gesture system handle it
     local is_pen, _ = self:isPenInput(ges)
@@ -2509,7 +2634,8 @@ function Pencil:onDrawTap(ges)
         end
     end
 
-    -- Check if finger tap - let gesture system handle it
+    -- Finger taps, and every tap in finger mode, belong to the gesture system
+    if self:isFingerMode() then return false end
     local is_pen, is_eraser_end, is_highlighter = self:isPenInput(ges)
     if not is_pen then
         return false
@@ -2573,6 +2699,7 @@ end
 -- This handler blocks gestures and handles eraser mode
 function Pencil:onDrawPan(ges)
     if not self:isEnabled() or self:isOverlayActive() then return false end
+    if self:isFingerMode() then return false end
 
     -- Check if raw input hook detected pen - if so, block gesture
     -- Raw input handles all drawing; this just needs to block swipe/pan gestures
@@ -2664,6 +2791,7 @@ end
 -- NOTE: For pen/highlighter, raw input hook may have already finalized the stroke
 function Pencil:onDrawPanRelease(ges)
     if not self:isEnabled() or self:isOverlayActive() then return false end
+    if self:isFingerMode() then return false end
 
     -- Let finger releases be handled by gesture system
     local is_pen, is_eraser_end, is_highlighter = self:isPenInput(ges)

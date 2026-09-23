@@ -10,10 +10,19 @@ Fork of [mysticknits/pencil.koplugin](https://github.com/mysticknits/pencil.kopl
   parsing) onto it.
 - Added `deploy.py` to copy the plugin and patched `input.lua` to a mounted Kobo.
 
+## 2026-09-23 (feat/finger-mode)
+
+- Finger mode: every stylus contact is passed through to KOReader as a finger.
+  Menu checkbox under Pencil, and a "Pencil: toggle finger/pen mode" gesture
+  action. The mode persists across books.
+- "Side button tap" setting: a quick press toggles pencil/eraser (upstream
+  default) or finger/pen mode. Holding the button highlights in pen mode and
+  does nothing in finger mode.
+- A side-button press held longer than 500 ms no longer counts as a tap, in
+  either mode.
+- `spec/side_button_spec.lua` covers the tap/hold decision and mode switching.
+
 ## Planned
 
-- Quick side-button tap toggles finger mode / pen mode instead of pen / eraser.
-  In finger mode stylus events fall through to normal touch handling and
-  holding the button does nothing. In pen mode holding the button highlights.
 - Blank note canvas for pen notes, attachable per highlight, per page, or per
   chapter.
