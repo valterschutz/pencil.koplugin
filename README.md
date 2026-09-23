@@ -17,7 +17,7 @@ If you resize your book while reading it, your annotations will be WONKY. This i
 - **Pen tip**: Draw annotations on your ebooks
 - **Eraser end**: Flip your stylus over to erase strokes instantly
 - **Highlighter**: Hold the stylus side button and drag to highlight; tap the side button to toggle pencil/eraser
-- **Finger mode**: Treat the stylus as a finger so taps, swipes and long-presses go to KOReader instead of drawing. Set **Side button tap** to *finger/pen mode* to switch modes with a quick press of the side button; holding the button in finger mode does nothing
+- **Finger mode**: Treat the pen tip as a finger so taps, swipes and long-presses go to KOReader instead of drawing. The eraser end still erases and holding the side button still highlights. Set **Side button tap** to *finger/pen mode* to switch modes with a quick press of the side button
 - **Swap Eraser/Highlighter**: Reassign which side button acts as eraser vs. highlighter from the menu
 - **Undo**: Undo your last stroke or eraser action
 - **Clear strokes**: Clear annotations for the current page or the entire document
@@ -40,7 +40,7 @@ If you resize your book while reading it, your annotations will be WONKY. This i
 4. Optionally map actions to gestures in Gesture Manager:
    - **Pencil: toggle on/off** — enable or disable the plugin
    - **Pencil: toggle pencil/eraser** — switch between tools
-   - **Pencil: toggle finger/pen mode** — pass the stylus through as a finger, or draw with it
+   - **Pencil: toggle finger/pen mode** — pass the pen tip through as a finger, or draw with it
    - **Pencil: select pencil** — switch to pencil
    - **Pencil: select eraser** — switch to eraser
    - **Pencil: undo** — undo last stroke or eraser action

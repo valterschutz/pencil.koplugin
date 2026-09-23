@@ -24,28 +24,24 @@ local function createMockPencil(options)
         side_button_used_for_highlight = false,
         highlighting = false,
         pen_down = false,
-        erasing = false,
         _saved = 0,
-        _ended_stroke = 0,
     }
 
     function mock:saveSettings() self._saved = self._saved + 1 end
-    function mock:endRawStroke() self._ended_stroke = self._ended_stroke + 1 end
-    function mock:cancelColorPickerTimer() end
     function mock:isFingerMode() return self.input_mode == MODE_FINGER end
+    mock.eraser_tool_active = false
+    mock.eraser_button_active = false
+
+    function mock:isFingerPassthrough(is_eraser_end, is_highlighter)
+        if not self:isFingerMode() then return false end
+        if is_eraser_end or is_highlighter then return false end
+        if self.side_button_down or self.pen_down then return false end
+        return not (self.eraser_tool_active or self.eraser_button_active)
+    end
 
     function mock:setInputMode(mode)
         assert(mode == MODE_PEN or mode == MODE_FINGER, "unknown input mode: " .. tostring(mode))
         if mode == self.input_mode then return end
-        if mode == MODE_FINGER and self.pen_down then
-            self.pen_down = false
-            if self.erasing then
-                self.erasing = false
-            else
-                self:cancelColorPickerTimer()
-                self:endRawStroke()
-            end
-        end
         self.input_mode = mode
         self:saveSettings()
     end
@@ -166,11 +162,50 @@ describe("side button", function()
             assert.equals(1, p._saved)
         end)
 
-        it("hold in finger mode does nothing", function()
+        it("hold in finger mode does not toggle", function()
             local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE, input_mode = MODE_FINGER })
             p:press(SIDE_BUTTON_TAP_MAX_MS + 1)
             assert.equals(MODE_FINGER, p.input_mode)
             assert.equals("pen", p.current_tool)
+        end)
+
+        it("hold used for highlighting in finger mode does not toggle", function()
+            local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE, input_mode = MODE_FINGER })
+            p:press(100, true)
+            assert.equals(MODE_FINGER, p.input_mode)
+        end)
+    end)
+
+    describe("finger passthrough", function()
+
+        it("never passes through in pen mode", function()
+            local p = createMockPencil()
+            assert.is_false(p:isFingerPassthrough(false, false))
+        end)
+
+        it("passes a bare pen tip through in finger mode", function()
+            local p = createMockPencil({ input_mode = MODE_FINGER })
+            assert.is_true(p:isFingerPassthrough(false, false))
+        end)
+
+        it("keeps the eraser end", function()
+            local p = createMockPencil({ input_mode = MODE_FINGER })
+            assert.is_false(p:isFingerPassthrough(true, false))
+            p.eraser_button_active = true
+            assert.is_false(p:isFingerPassthrough(false, false))
+        end)
+
+        it("keeps the pen while the side button is held", function()
+            local p = createMockPencil({ input_mode = MODE_FINGER })
+            assert.is_false(p:isFingerPassthrough(false, true))
+            p:onStylusButtonPress()
+            assert.is_false(p:isFingerPassthrough(false, false))
+        end)
+
+        it("keeps a contact it already started handling", function()
+            local p = createMockPencil({ input_mode = MODE_FINGER })
+            p.pen_down = true
+            assert.is_false(p:isFingerPassthrough(false, false))
         end)
     end)
 
@@ -187,22 +222,5 @@ describe("side button", function()
             assert.equals(0, p._saved)
         end)
 
-        it("finishes an in-progress stroke when leaving pen mode", function()
-            local p = createMockPencil()
-            p.pen_down = true
-            p:setInputMode(MODE_FINGER)
-            assert.is_false(p.pen_down)
-            assert.equals(1, p._ended_stroke)
-        end)
-
-        it("finishes an in-progress erase when leaving pen mode", function()
-            local p = createMockPencil()
-            p.pen_down = true
-            p.erasing = true
-            p:setInputMode(MODE_FINGER)
-            assert.is_false(p.pen_down)
-            assert.is_false(p.erasing)
-            assert.equals(0, p._ended_stroke)
-        end)
     end)
 end)
