@@ -20,6 +20,7 @@ local HorizontalSpan = require("ui/widget/horizontalspan")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local PencilGeometry = require("lib/geometry")
+local Export = require("lib/export")
 local Notes = require("lib/notes")
 local NoteCanvas = require("lib/notecanvas")
 local ButtonDialog = require("ui/widget/buttondialog")
@@ -31,10 +32,14 @@ local Size = require("ui/size")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local Menu = require("ui/widget/menu")
+local PathChooser = require("ui/widget/pathchooser")
+local Png = require("ffi/png")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
+local ffi = require("ffi")
 local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
+local util = require("util")
 local _ = require("gettext")
 local T = require("ffi/util").template
 local time = require("ui/time")
@@ -62,6 +67,11 @@ local SIDE_BUTTON_TAP_TOOL = "tool"  -- toggle pencil/eraser
 local SIDE_BUTTON_TAP_MODE = "mode"  -- toggle finger/pen mode
 local SIDE_BUTTON_TAP_MAX_MS = 500   -- longer than this is a hold, not a tap
 local SIDE_BUTTON_TAP_MAX_PX = 10    -- tip movement beyond this is a drag, not a tap
+local NOTE_EXPORT_DIR_SETTING = "pencil_note_export_dir"  -- notes root; nil means <device root>/notes
+local NOTE_EXPORT_DEFAULT_SUBDIR = "notes"
+local NOTE_EXPORT_NAME_MAX_CHARS = 80  -- per part of an exported file name
+local NOTE_EXPORT_PDF = "pdf"
+local NOTE_EXPORT_PNG = "png"
 local SIDE_BUTTON_DOUBLE_TAP_MS = 250 -- second tap within this of the first opens the pen note menu
 
 -- Color picker trigger settings
@@ -1351,10 +1361,38 @@ function Pencil:addToMainMenu(menu_items)
             },
             {
                 text = _("Browse pen notes"),
-                help_text = _("List every pen note of this book in reading order. Tap a note to open it; long-press it to go to its place in the book or to delete it."),
+                help_text = _("List every pen note of this book in reading order. Tap a note to open it; long-press it to go to its place in the book, to export it or to delete it."),
                 callback = function()
                     self:showNoteBrowser()
                 end,
+            },
+            {
+                text = _("Export pen notes"),
+                help_text = _("Write every pen note of this book as one PDF or as one PNG image per note page, into a folder named after the book inside the notes folder. Each page looks as it does on the canvas, title line and highlighted text included. Single notes are exported from the note browser or the canvas menu."),
+                sub_item_table = {
+                    {
+                        text = _("All notes as one PDF"),
+                        callback = function()
+                            self:exportAllNotes(NOTE_EXPORT_PDF)
+                        end,
+                    },
+                    {
+                        text = _("All notes as PNG images"),
+                        callback = function()
+                            self:exportAllNotes(NOTE_EXPORT_PNG)
+                        end,
+                        separator = true,
+                    },
+                    {
+                        text_func = function()
+                            return T(_("Notes folder: %1"), BD.dirpath(self:noteExportRoot()))
+                        end,
+                        help_text = _("The folder that holds one subfolder of exported notes per book. Defaults to \"notes\" at the top of the device's storage."),
+                        callback = function(touchmenu_instance)
+                            self:chooseNoteExportDir(touchmenu_instance)
+                        end,
+                    },
+                },
                 separator = true,
             },
             {
@@ -4097,8 +4135,9 @@ function Pencil:eraseAtPoint(x, y, page)
     return nil
 end
 
--- Render a complete stroke
-function Pencil:renderStroke(bb, stroke)
+-- Render a complete stroke. With plain set, the color is used as drawn
+-- even in night mode, for buffers that are not shown on the screen.
+function Pencil:renderStroke(bb, stroke, plain)
     if not stroke.points or #stroke.points < 1 then
         return
     end
@@ -4110,7 +4149,7 @@ function Pencil:renderStroke(bb, stroke)
     local color = stroke.color or self.tool_settings[tool].color or Blitbuffer.COLOR_BLACK
 
     -- Reinvert color in night mode (if it's not black or gray)
-    if Screen.night_mode and stroke.color_name ~= "Black" and stroke.color_name ~= "Gray" then
+    if Screen.night_mode and not plain and stroke.color_name ~= "Black" and stroke.color_name ~= "Gray" then
         color = color:invert()
     end
 
@@ -4794,6 +4833,10 @@ function Pencil:openNote(anchor, on_closed)
         on_delete = function(canvas)
             self:confirmDeleteNote(note, canvas)
         end,
+        on_export = function(canvas)
+            canvas:prunePages()
+            self:showNoteExportMenu(note)
+        end,
         on_close = function(_, changed)
             self.note_canvas = nil
             if not self.touch_zones_registered then
@@ -4947,6 +4990,20 @@ function Pencil:showNoteBrowserActions(note)
                 end,
             }},
             {{
+                text = _("Export as PDF"),
+                callback = function()
+                    UIManager:close(dialog)
+                    self:exportNotes({ note }, NOTE_EXPORT_PDF)
+                end,
+            }},
+            {{
+                text = _("Export as PNG images"),
+                callback = function()
+                    UIManager:close(dialog)
+                    self:exportNotes({ note }, NOTE_EXPORT_PNG)
+                end,
+            }},
+            {{
                 text = _("Delete note"),
                 callback = function()
                     UIManager:close(dialog)
@@ -4961,6 +5018,256 @@ function Pencil:showNoteBrowserActions(note)
                             self:showNoteBrowser()
                         end,
                     })
+                end,
+            }},
+        },
+    }
+    UIManager:show(dialog)
+end
+
+-- The notes root: the folder set in the Pencil menu, else "notes" at the
+-- top of the device's storage (the book's folder when there is none).
+function Pencil:noteExportRoot()
+    local root = G_reader_settings:readSetting(NOTE_EXPORT_DIR_SETTING)
+    if type(root) ~= "string" or root == "" then
+        local base = Device.home_dir
+        if type(base) ~= "string" or base == "" then
+            base = util.splitFilePathName(self.ui.document.file)
+        end
+        root = base:gsub("/+$", "") .. "/" .. NOTE_EXPORT_DEFAULT_SUBDIR
+    end
+    root = root:gsub("/+$", "")
+    assert(root ~= "", "no folder for the exported pen notes")
+    return root
+end
+
+-- Where this book's exported notes go: a subfolder of the root named after
+-- the book.
+function Pencil:noteExportDir()
+    return self:noteExportRoot() .. "/" .. Export.fileName(self:bookExportName(), NOTE_EXPORT_NAME_MAX_CHARS)
+end
+
+-- Lets the user pick the notes root, or go back to the default.
+function Pencil:chooseNoteExportDir(touchmenu_instance)
+    local dialog
+    dialog = ButtonDialog:new{
+        title = _("Where should exported pen notes go?"),
+        buttons = {
+            {{
+                text = _("The default folder"),
+                callback = function()
+                    UIManager:close(dialog)
+                    G_reader_settings:delSetting(NOTE_EXPORT_DIR_SETTING)
+                    if touchmenu_instance then touchmenu_instance:updateItems() end
+                end,
+            }},
+            {{
+                text = _("Choose a folder…"),
+                callback = function()
+                    UIManager:close(dialog)
+                    local root = self:noteExportRoot()
+                    UIManager:show(PathChooser:new{
+                        select_directory = true,
+                        select_file = false,
+                        show_files = false,
+                        path = lfs.attributes(root, "mode") == "directory" and root or util.splitFilePathName(root),
+                        onConfirm = function(dir)
+                            G_reader_settings:saveSetting(NOTE_EXPORT_DIR_SETTING, (dir:gsub("/+$", "")))
+                            if touchmenu_instance then touchmenu_instance:updateItems() end
+                        end,
+                    })
+                end,
+            }},
+        },
+    }
+    UIManager:show(dialog)
+end
+
+-- The book's file name without its extension, the name of its notes folder.
+function Pencil:bookExportName()
+    local _, name = util.splitFilePathName(self.ui.document.file)
+    local stem = util.splitFileNameSuffix(name)
+    return stem ~= "" and stem or name
+end
+
+-- The note's part of an exported file name; the browser label would carry
+-- quotes and colons that file systems refuse.
+function Pencil:noteExportLabel(note)
+    local anchor = self:liveAnchor(note)
+    if anchor.kind == Notes.KIND_BOOK then
+        return _("Book note")
+    elseif anchor.kind == Notes.KIND_CHAPTER then
+        return T(_("Chapter - %1"), anchor.title ~= "" and anchor.title or _("untitled"))
+    elseif anchor.kind == Notes.KIND_PAGE then
+        return T(_("Page %1"), tostring(self:resolveAnchorPage(anchor)))
+    elseif type(anchor.text) == "string" and anchor.text ~= "" then
+        return T(_("Highlight - %1"), Notes.snippet(anchor.text, NOTE_TITLE_MAX_CHARS))
+    else
+        return _("Highlight note")
+    end
+end
+
+-- Calls handle(bb, page_index, page_count) with every page of the note
+-- painted into a screen-size RGB24 buffer, as the canvas shows it minus
+-- the title bar icons and the mode marker. Each buffer is freed after its
+-- call.
+function Pencil:eachNotePageImage(note, handle)
+    local canvas = NoteCanvas:new{
+        pencil = self,
+        note = note,
+        title = self:noteTitle(note),
+        header = self:noteHeader(self:liveAnchor(note)),
+        tap_max_ms = SIDE_BUTTON_TAP_MAX_MS,
+        tap_max_px = SIDE_BUTTON_TAP_MAX_PX,
+        on_close = function() end,
+        for_export = true,
+    }
+    local width, height = Screen:getWidth(), Screen:getHeight()
+    local ok, err = pcall(function()
+        for i = 1, #note.pages do
+            local bb = Blitbuffer.new(width, height, Blitbuffer.TYPE_BBRGB24)
+            local painted, paint_err = pcall(function()
+                canvas:paintPage(bb, i)
+                handle(bb, i, #note.pages)
+            end)
+            bb:free()
+            if not painted then error(paint_err, 0) end
+        end
+    end)
+    canvas:freeWidgets()
+    if not ok then error(err, 0) end
+end
+
+-- Writes one PNG per page of the note into dir. Returns the paths.
+function Pencil:writeNoteImages(note, dir, label)
+    local stem = Export.fileName(label, NOTE_EXPORT_NAME_MAX_CHARS)
+    local paths = {}
+    self:eachNotePageImage(note, function(bb, index, count)
+        local path = dir .. "/" .. Export.pageFileName(stem, index, count, NOTE_EXPORT_PNG)
+        assert(tonumber(bb.stride) == bb:getWidth() * 3, "export buffer must be packed RGB")
+        local ok, err = Png.encodeToFile(path, ffi.cast("const uint8_t*", bb.data), bb:getWidth(), bb:getHeight(), 3)
+        assert(ok, T(_("cannot write %1: %2"), BD.filepath(path), tostring(err)))
+        table.insert(paths, path)
+    end)
+    return paths
+end
+
+-- Writes every page of every note into one PDF at path, images deflated
+-- when zlib is at hand. Returns the page count.
+function Pencil:writeNotesPdf(notes, path)
+    local has_zlib, zlib = pcall(require, "ffi/zlib")
+    if not has_zlib then
+        logger.warn("Pencil: zlib unavailable, writing an uncompressed PDF:", zlib)
+    end
+    local file, open_err = io.open(path, "wb")
+    assert(file, T(_("cannot write %1: %2"), BD.filepath(path), tostring(open_err)))
+    local writer = Export.PdfWriter.new(function(bytes)
+        assert(file:write(bytes), T(_("cannot write %1"), BD.filepath(path)))
+    end, Screen:getDPI(), has_zlib and zlib.zlib_compress or nil)
+    local ok, err = pcall(function()
+        for _, note in ipairs(notes) do
+            self:eachNotePageImage(note, function(bb)
+                assert(tonumber(bb.stride) == bb:getWidth() * 3, "export buffer must be packed RGB")
+                writer:addImagePage(bb:getWidth(), bb:getHeight(), ffi.string(bb.data, tonumber(bb.stride) * bb:getHeight()))
+            end)
+        end
+        writer:finish()
+    end)
+    file:close()
+    if not ok then
+        os.remove(path)
+        error(err, 0)
+    end
+    return #writer.pages
+end
+
+-- Runs export() once a progress message is on screen, then replaces the
+-- message with the text export() returns or with the error it raised.
+function Pencil:runNoteExport(export)
+    local progress = InfoMessage:new{ text = _("Exporting pen notes…") }
+    UIManager:show(progress)
+    UIManager:tickAfterNext(function()
+        local ok, result = pcall(export)
+        UIManager:close(progress)
+        if ok then
+            UIManager:show(InfoMessage:new{ text = result })
+        else
+            logger.warn("Pencil: pen note export failed:", result)
+            UIManager:show(InfoMessage:new{ text = T(_("Export failed: %1"), tostring(result)) })
+        end
+    end)
+end
+
+-- Exports the notes to the book's notes folder as one PDF holding every
+-- page, or as one PNG image per page, named after the notes. Reports the
+-- outcome in a message.
+function Pencil:exportNotes(notes, format)
+    assert(format == NOTE_EXPORT_PDF or format == NOTE_EXPORT_PNG, "unknown export format: " .. tostring(format))
+    assert(#notes >= 1, "no notes to export")
+    for _, note in ipairs(notes) do
+        if Notes.isEmpty(note) then
+            UIManager:show(InfoMessage:new{ text = T(_("The pen note \"%1\" is empty."), self:noteTitle(note)) })
+            return
+        end
+    end
+    local labels = {}
+    for i, note in ipairs(notes) do
+        labels[i] = self:noteExportLabel(note)
+    end
+    labels = Export.uniqueLabels(labels)
+    self:runNoteExport(function()
+        local dir = self:noteExportDir()
+        assert(util.makePath(dir), T(_("cannot create the folder %1"), BD.dirpath(dir)))
+        if format == NOTE_EXPORT_PDF then
+            local label = #notes == 1 and labels[1] or _("All notes")
+            local path = dir .. "/" .. Export.fileName(label, NOTE_EXPORT_NAME_MAX_CHARS, NOTE_EXPORT_PDF)
+            local pages = self:writeNotesPdf(notes, path)
+            logger.info("Pencil: exported", pages, "note pages to", path)
+            return T(_("Exported %1 pages to %2"), pages, BD.filepath(path))
+        else
+            local count = 0
+            for i, note in ipairs(notes) do
+                count = count + #self:writeNoteImages(note, dir, labels[i])
+            end
+            logger.info("Pencil: exported", count, "note page images to", dir)
+            return T(_("Exported %1 images to %2"), count, BD.dirpath(dir))
+        end
+    end)
+end
+
+-- Every note of the book in browser order, or a message when there is none.
+function Pencil:exportAllNotes(format)
+    if not self:ensureNotesLoaded() then return end
+    local notes = Notes.browseOrder(self.notes, function(note) return self:noteLocation(note) end)
+    if #notes == 0 then
+        UIManager:show(InfoMessage:new{ text = _("This book has no pen notes.") })
+        return
+    end
+    self:exportNotes(notes, format)
+end
+
+-- Format chooser for a single note.
+function Pencil:showNoteExportMenu(note)
+    if Notes.isEmpty(note) then
+        UIManager:show(InfoMessage:new{ text = _("This pen note is empty.") })
+        return
+    end
+    local dialog
+    dialog = ButtonDialog:new{
+        title = self:noteTitle(note),
+        buttons = {
+            {{
+                text = _("Export as PDF"),
+                callback = function()
+                    UIManager:close(dialog)
+                    self:exportNotes({ note }, NOTE_EXPORT_PDF)
+                end,
+            }},
+            {{
+                text = _("Export as PNG images"),
+                callback = function()
+                    UIManager:close(dialog)
+                    self:exportNotes({ note }, NOTE_EXPORT_PNG)
                 end,
             }},
         },

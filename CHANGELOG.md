@@ -116,6 +116,28 @@ Fork of [mysticknits/pencil.koplugin](https://github.com/mysticknits/pencil.kopl
 - `Notes.browseOrder` (pure, in `lib/notes.lua`) does the ordering and is
   covered by `spec/notes_spec.lua`.
 
+## 2026-09-23 (feat/note-export)
+
+- Exporting pen notes: "Export pen notes" in the Pencil menu writes every
+  note of the book, in browser order, as one PDF or as one PNG per note
+  page; a single note is exported from the browser's long-press dialog or
+  from "Export note…" in the canvas menu (blank pages are pruned first).
+  Each page is painted by a NoteCanvas in export mode (`for_export`: title
+  bar without icons, no mode marker, colors as drawn even in night mode)
+  into a screen-size RGB24 blitbuffer. PNGs go through `ffi/png`; the PDF
+  is written by `lib/export.lua`'s pure `PdfWriter`, one FlateDecode
+  (zlib via `ffi/zlib`, raw if unavailable) DeviceRGB image per page at
+  the screen's DPI, streamed to the file page by page. Files land in
+  `<notes root>/<book name>/`, the root being "notes" at the top of the device's
+  storage (`Device.home_dir`, `/mnt/onboard` on Kobo) or the folder chosen
+  under "Notes folder"
+  (`pencil_note_export_dir`); they are named after the note ("All notes"
+  for the whole book) with a ` - p01` suffix per page for images; repeated
+  labels get ` (2)`, ` (3)`.
+- `spec/export_spec.lua` covers the names and the PDF structure (offsets
+  in the xref table, page tree, filters); the writer's output was also
+  checked with pdfinfo and mutool.
+
 ## Planned
 
-- Exporting pen notes as images or a PDF.
+- Nothing queued.

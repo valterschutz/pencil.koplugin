@@ -53,9 +53,10 @@ If you resize your book while reading it, your annotations will be WONKY. This i
 Pen notes are blank canvases stored next to the book in `pencil_notes.lua`, separate from the on-page strokes.
 
 - **Page, chapter or book note**: open the chooser from the Pencil menu (**Pen note…**), the **Pencil: pen note…** gesture action, or by holding the side button and double-tapping the page with the pen. It tells you whether a note already exists for the current page, the current chapter (the nearest table-of-contents entry) and the book
-- **Browsing**: **Browse pen notes** in the Pencil menu, **Browse all pen notes** in the chooser, or the **Pencil: browse pen notes** gesture action list every pen note of the book in reading order, book note first, with the page number on the right. Tap a note to open it and closing the canvas returns to the list; long-press a note to go to its place in the book or to delete it
+- **Browsing**: **Browse pen notes** in the Pencil menu, **Browse all pen notes** in the chooser, or the **Pencil: browse pen notes** gesture action list every pen note of the book in reading order, book note first, with the page number on the right. Tap a note to open it and closing the canvas returns to the list; long-press a note to go to its place in the book, to export it or to delete it
+- **Exporting**: **Export pen notes** in the Pencil menu writes every note of the book as one PDF (one page per note page) or as one PNG image per page. A single note is exported from the browser's long-press menu or from **Export note…** in the canvas menu. Pages are rendered as they look on the canvas, title line and highlighted text included, at the screen's physical size. Files go to `notes/<book>/` at the top of the device's storage (`/mnt/onboard/notes/` on a Kobo) unless **Notes folder** in that submenu points the root elsewhere, and are named after the note: `All notes.pdf`, `Page 12.pdf`, `Chapter - Title - p01.png`
 - **Highlight note**: long-press a highlight and tap **Pen note** next to **Note**; it is also in the **…** menu. On a fresh text selection, **Pen note** in the selection menu highlights the text first and then opens the canvas. The highlighted text is shown at the top of the note's first page, and a highlight that has a pen note shows a small pencil glyph in the margin, next to KOReader's own note mark. On ZenOS the selection menu shows plugin buttons only with *Show other items* enabled under *Highlight / Lookup*
-- On the canvas the pen draws with the current pen colour and width, holding the side button draws with the highlighter and the eraser end erases. The menu icon offers undo, clear page, delete page, the finger/pen mode switch and delete note; the X closes the canvas and saves it. A note that is closed empty is discarded
+- On the canvas the pen draws with the current pen colour and width, holding the side button draws with the highlighter and the eraser end erases. The menu icon offers undo, clear page, delete page, the finger/pen mode switch, export note and delete note; the X closes the canvas and saves it. A note that is closed empty is discarded
 - A note has as many pages as you need. The title bar shows the note name and **Page x of y** on one line. Turn the page as in the reader: swipe left (or press the forward page button) to go to the next page; on the last page this adds a blank one. Swipe right (or press the back page button) to go back. **Delete page** in the menu removes the current page (after confirmation if it has strokes); blank pages are also dropped when the note is closed
 - Holding the side button and tapping the canvas switches between finger and pen mode, as does the menu. In finger mode the bare pen tip swipes between pages and taps the title bar like a finger, while the side button still highlights and the eraser end still erases
 - A page that has a page note shows a small light-gray triangle in its top-right corner
@@ -103,7 +104,6 @@ When enabled, the plugin automatically groups your pencil strokes into logical a
 
 1. Export of annotations
 2. Handling changing canvas size
-3. Exporting pen notes as images or a PDF
 
 ## Acknowledgements
 

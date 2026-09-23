@@ -56,4 +56,4 @@ a KOReader stylus plugin, run on a Kobo Libra Colour (Kobo_monza) with the Kobo 
 
 ## Planned features
 
-- Exporting notes as images or PDF.
+- Nothing queued.

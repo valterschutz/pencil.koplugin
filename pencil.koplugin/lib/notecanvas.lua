@@ -17,6 +17,10 @@ delete note.
 An optional header (the text of a highlight) is shown under the title bar
 on the first page only; the pen draws below it.
 
+With for_export set, the canvas is never shown: it only paints pages into
+off-screen buffers for export (see paintPage), with a title bar without
+icons, no finger-mode marker and stroke colors as drawn.
+
 @module pencil.lib.notecanvas
 --]]--
 
@@ -61,6 +65,8 @@ local NoteCanvas = InputContainer:extend{
     tap_max_px = nil,    -- ... moving less than this is a tap, not a highlight
     on_close = nil,      -- function(canvas, changed)
     on_delete = nil,     -- function(canvas); the canvas closes itself afterwards
+    on_export = nil,     -- function(canvas)
+    for_export = false,
     covers_fullscreen = true,
 }
 
@@ -79,9 +85,9 @@ function NoteCanvas:init()
         align = "left",
         title = self:titleText(),
         with_bottom_line = true,
-        left_icon = "appbar.menu",
+        left_icon = not self.for_export and "appbar.menu" or nil,
         left_icon_tap_callback = function() self:showMenu() end,
-        close_callback = function() self:onClose() end,
+        close_callback = not self.for_export and function() self:onClose() end or nil,
         show_parent = self,
     }
     self[1] = self.title_bar
@@ -164,12 +170,24 @@ function NoteCanvas:paintTo(bb, x, y)
         self:paintHeader(bb, x, y + self.title_bar_height)
     end
     for _, stroke in ipairs(self:strokes()) do
-        self.pencil:renderStroke(bb, stroke)
+        self.pencil:renderStroke(bb, stroke, self.for_export)
     end
     if self.current_stroke then
         self.pencil:renderStroke(bb, self.current_stroke)
     end
-    self.pencil:renderFingerModeMarker(bb)
+    if not self.for_export then
+        self.pencil:renderFingerModeMarker(bb)
+    end
+end
+
+-- Paints page index of the note into bb at (0, 0), as the canvas would show
+-- it. Only for a canvas made for export.
+function NoteCanvas:paintPage(bb, index)
+    assert(self.for_export, "paintPage is for an export canvas")
+    assert(index >= 1 and index <= #self.note.pages, "page index out of range: " .. tostring(index))
+    self.page_index = index
+    self.title_bar:setTitle(self:titleText(), true)
+    self:paintTo(bb, 0, 0)
 end
 
 function NoteCanvas:paintHeader(bb, x, y)
@@ -420,6 +438,15 @@ function NoteCanvas:deletePage()
     self:goToPage(math.min(self.page_index, #self.note.pages))
 end
 
+-- Drops blank pages now rather than at close, so an export of the note
+-- being edited holds only drawn pages; the view moves along if needed.
+function NoteCanvas:prunePages()
+    self:penUp()
+    if Notes.prunePages(self.note) > 0 then
+        self:goToPage(math.min(self.page_index, #self.note.pages))
+    end
+end
+
 function NoteCanvas:confirmDeletePage()
     if Notes.isPageEmpty(self:currentPage()) then
         self:deletePage()
@@ -488,6 +515,15 @@ function NoteCanvas:showMenu()
             end,
         }},
     }
+    if self.on_export then
+        table.insert(buttons, {{
+            text = _("Export note…"),
+            callback = function()
+                UIManager:close(dialog)
+                self.on_export(self)
+            end,
+        }})
+    end
     if self.on_delete then
         table.insert(buttons, {{
             text = _("Delete note"),
@@ -514,6 +550,12 @@ function NoteCanvas:onClose()
 end
 
 function NoteCanvas:onCloseWidget()
+    self:freeWidgets()
+end
+
+-- Releases the title bar and header; an export canvas is never closed as
+-- a widget, so its owner calls this when done.
+function NoteCanvas:freeWidgets()
     self.title_bar:free()
     if self.header_widget then
         self.header_widget:free()

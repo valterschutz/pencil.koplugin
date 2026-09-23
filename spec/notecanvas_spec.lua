@@ -128,7 +128,8 @@ local function newPencil()
         transformCoordinates = function(_, x, y) return x, y end,
         drawLineSegment = function(self) self.segments = self.segments + 1 end,
         drawHighlighterSegment = function(self) self.highlighter_segments = self.highlighter_segments + 1 end,
-        renderStroke = function() end,
+        rendered = {},
+        renderStroke = function(self, _, stroke, plain) table.insert(self.rendered, { stroke = stroke, plain = plain }) end,
         marker_paints = 0,
         renderFingerModeMarker = function(self) self.marker_paints = self.marker_paints + 1 end,
     }
@@ -322,13 +323,21 @@ describe("NoteCanvas", function()
         assert.same({ false }, untouched_closed)
     end)
 
-    it("offers delete only when a handler is given", function()
+    it("offers export and delete only when a handler is given", function()
         local canvas = newCanvas()
         canvas:showMenu()
         assert.equals(4, #ui.shown[1].buttons)
         canvas.on_delete = function() end
         canvas:showMenu()
         assert.equals(5, #ui.shown[2].buttons)
+        assert.equals("Delete note", ui.shown[2].buttons[5][1].text)
+        local exported
+        canvas.on_export = function(c) exported = c end
+        canvas:showMenu()
+        assert.equals(6, #ui.shown[3].buttons)
+        assert.equals("Export note…", ui.shown[3].buttons[5][1].text)
+        ui.shown[3].buttons[5][1].callback()
+        assert.equals(canvas, exported)
     end)
 
     describe("pages", function()
@@ -587,6 +596,80 @@ describe("NoteCanvas", function()
             assert.equals(1, canvas.pencil.marker_paints)
             canvas:paintTo(screen.bb, 0, 0)
             assert.equals(2, canvas.pencil.marker_paints)
+        end)
+    end)
+
+    describe("export canvas", function()
+        local function newExportCanvas(note, header)
+            return NoteCanvas:new{
+                pencil = newPencil(),
+                note = note,
+                title = "Book note",
+                header = header,
+                tap_max_ms = TAP_MAX_MS,
+                tap_max_px = TAP_MAX_PX,
+                on_close = function() end,
+                for_export = true,
+            }
+        end
+
+        it("has a title bar without icons", function()
+            local canvas = newExportCanvas(Notes.newNote({ kind = "book" }, 1))
+            assert.is_nil(canvas.title_bar.left_icon)
+            assert.is_nil(canvas.title_bar.close_callback)
+            assert.equals(TITLE_H, canvas.title_bar_height)
+        end)
+
+        it("paints any page on request with its title, no marker and plain colors", function()
+            local note = Notes.newNote({ kind = "book" }, 1)
+            table.insert(note.pages[1].strokes, { tool = "pen", points = { { x = 1, y = 100 } } })
+            Notes.addPage(note)
+            table.insert(note.pages[2].strokes, { tool = "pen", points = { { x = 2, y = 100 } } })
+            table.insert(note.pages[2].strokes, { tool = "pen", points = { { x = 3, y = 100 } } })
+            local canvas = newExportCanvas(note, "the highlighted text")
+            canvas:paintPage(screen.bb, 2)
+            assert.equals("Book note · Page 2 of 2", canvas.title_bar.title)
+            assert.equals(2, #canvas.pencil.rendered)
+            assert.is_true(canvas.pencil.rendered[1].plain)
+            assert.equals(0, canvas.pencil.marker_paints)
+            assert.equals(0, canvas.header_widget.painted)
+            canvas:paintPage(screen.bb, 1)
+            assert.equals("Book note · Page 1 of 2", canvas.title_bar.title)
+            assert.equals(3, #canvas.pencil.rendered)
+            assert.equals(1, canvas.header_widget.painted)
+            assert.has_error(function() canvas:paintPage(screen.bb, 3) end)
+            canvas:freeWidgets()
+            assert.is_true(canvas.header_widget.freed)
+        end)
+
+        it("is the only kind that paints pages", function()
+            local canvas = newCanvas()
+            assert.has_error(function() canvas:paintPage(screen.bb, 1) end)
+            assert.is_nil(canvas.pencil.rendered[1] and canvas.pencil.rendered[1].plain)
+        end)
+    end)
+
+    describe("prunePages", function()
+        it("drops blank pages while open and keeps the view on a page", function()
+            local canvas = newCanvas()
+            down(canvas, 100, 200)
+            up(canvas)
+            swipe(canvas, "west")
+            swipe(canvas, "west")
+            assert.equals(3, #canvas.note.pages)
+            assert.equals(3, canvas.page_index)
+            canvas:prunePages()
+            assert.equals(1, #canvas.note.pages)
+            assert.equals(1, canvas.page_index)
+            assert.equals("Book note · Page 1 of 1", canvas.title_bar.title)
+        end)
+
+        it("finishes the stroke in progress first", function()
+            local canvas = newCanvas()
+            down(canvas, 100, 200)
+            canvas:prunePages()
+            assert.is_false(canvas.pen_down)
+            assert.equals(1, #strokes(canvas))
         end)
     end)
 end)
