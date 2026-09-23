@@ -65,8 +65,14 @@ Fork of [mysticknits/pencil.koplugin](https://github.com/mysticknits/pencil.kopl
   gesture detection, so it swipes between pages and taps the title bar; the
   side button and the eraser end keep working.
 
+## 2026-09-23 (feat/note-marker)
+
+- Pages that have a page note show a small light-gray triangle in the
+  top-right corner. It is painted with the on-page strokes, so it needs no
+  extra refresh; the lookup is cached per page and dropped on navigation and
+  whenever a note canvas closes.
+
 ## Planned
 
 - Browsing all pen notes of a book (list, open, go to location).
 - Exporting pen notes as images or a PDF.
-- A marker on pages that have a pen note.

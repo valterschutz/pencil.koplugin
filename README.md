@@ -56,6 +56,7 @@ Pen notes are blank canvases stored next to the book in `pencil_notes.lua`, sepa
 - On the canvas the pen draws with the current pen colour and width, holding the side button draws with the highlighter and the eraser end erases. The menu icon offers undo, clear page, delete page, the finger/pen mode switch and delete note; the X closes the canvas and saves it. A note that is closed empty is discarded
 - A note has as many pages as you need. The title bar shows the note name and **Page x of y** on one line. Turn the page as in the reader: swipe left (or press the forward page button) to go to the next page; on the last page this adds a blank one. Swipe right (or press the back page button) to go back. **Delete page** in the menu removes the current page (after confirmation if it has strokes); blank pages are also dropped when the note is closed
 - Holding the side button and tapping the canvas switches between finger and pen mode, as does the menu. In finger mode the bare pen tip swipes between pages and taps the title bar like a finger, while the side button still highlights and the eraser end still erases
+- A page that has a page note shows a small light-gray triangle in its top-right corner
 - Page notes in EPUBs follow the text when the layout changes, chapter notes follow their table-of-contents entry, and highlight notes are keyed to the highlight itself
 
 ## Questions or Issues with the Plugin

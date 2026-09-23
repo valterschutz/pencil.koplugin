@@ -76,6 +76,8 @@ local IMAGE_CAPTURE_DEBOUNCE_S = 4       -- seconds after last stroke before cap
 local IMAGE_BADGE_SIZE = 48              -- on-page badge edge (px) when annotation is stale
 local IMAGE_BADGE_HIT_PAD = 32           -- extra pixels around badge for tap hit-test
 local IMAGE_BADGE_MARGIN_GAP = 5         -- gap from text/screen edge for margin badge
+local NOTE_MARKER_SIZE = 24              -- edge (px) of the corner triangle on pages with a pen note
+local NOTE_MARKER_GRAY = 0xCC            -- luminance of that triangle; light so it stays unobtrusive
 
 -- Module-level reference to the most recently initialized Pencil instance.
 -- Used by the bookmark-list hook (a class-level monkey-patch installed once)
@@ -161,6 +163,7 @@ local Pencil = InputContainer:extend{
     notes = nil,          -- Notes store, see lib/notes.lua
     notes_loaded = false, -- set true once the sidecar file was read (or found absent)
     note_canvas = nil,    -- open NoteCanvas widget, or nil
+    note_marker = nil,    -- { page = <current page>, shown = bool }, see Pencil:renderNoteMarker
 }
 
 function Pencil:init()
@@ -4206,6 +4209,8 @@ function Pencil:paintTo(bb, x, y)
         end
     end
 
+    self:renderNoteMarker(bb, page)
+
     -- Render current stroke being drawn (only if on current page)
     if self.current_stroke and self.current_stroke.page == page then
         self:renderStroke(bb, self.current_stroke)
@@ -4394,6 +4399,7 @@ end
 
 function Pencil:loadNotes()
     self.notes = Notes.newStore()
+    self:invalidateNoteMarker()
     local filepath = self:getNotesFilePath()
     if not filepath then
         logger.warn("Pencil: no sidecar dir available for loading pen notes")
@@ -4526,6 +4532,33 @@ function Pencil:findNote(anchor)
     return Notes.find(self.notes, anchor, function(a) return self:resolveAnchorPage(a) end)
 end
 
+-- Whether the page being shown has a page note. Cached per page because a
+-- lookup re-resolves xpointers in rolling documents and paintTo runs on
+-- every repaint; the cache is dropped on navigation and when notes change.
+function Pencil:currentPageHasNote(page)
+    if not self.notes_loaded then return false end
+    if not (self.note_marker and self.note_marker.page == page) then
+        self.note_marker = { page = page, shown = self:findNote(self:pageAnchor()) ~= nil }
+    end
+    return self.note_marker.shown
+end
+
+function Pencil:invalidateNoteMarker()
+    self.note_marker = nil
+end
+
+-- A small light-gray triangle in the top-right corner marks pages that have
+-- a page note. `page` is the current page as computed by paintTo.
+function Pencil:renderNoteMarker(bb, page)
+    if not self:currentPageHasNote(page) then return end
+    local sw = Screen:getWidth()
+    local color = Blitbuffer.Color8(NOTE_MARKER_GRAY)
+    for row = 0, NOTE_MARKER_SIZE - 1 do
+        local width = NOTE_MARKER_SIZE - row
+        bb:paintRectRGB32(sw - width, row, width, 1, color)
+    end
+end
+
 -- Opens the canvas for the anchor, creating the note if there is none. An
 -- untouched new note is dropped again when the canvas closes.
 function Pencil:openNote(anchor)
@@ -4556,6 +4589,7 @@ function Pencil:openNote(anchor)
             if Notes.isEmpty(note) then
                 Notes.remove(self.notes, note)
             end
+            self:invalidateNoteMarker()
             if changed then
                 self:saveNotes()
             end
@@ -4758,6 +4792,7 @@ end
 
 -- Handle page changes (paging mode)
 function Pencil:onPageUpdate(pageno)
+    self:invalidateNoteMarker()
     -- Clear any in-progress stroke when page changes
     if self.current_stroke and #self.current_stroke.points >= 2 then
         -- Save the stroke before clearing. The inline saveStrokes below covers
@@ -4783,6 +4818,7 @@ end
 
 -- Handle position changes (rolling/scroll mode)
 function Pencil:onUpdatePos()
+    self:invalidateNoteMarker()
     -- Clear any in-progress stroke when position changes
     if self.current_stroke and #self.current_stroke.points >= 2 then
         self:cancelPendingSave()
