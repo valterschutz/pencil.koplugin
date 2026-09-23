@@ -57,6 +57,7 @@ local SIDE_BUTTON_TAP_TOOL = "tool"  -- toggle pencil/eraser
 local SIDE_BUTTON_TAP_MODE = "mode"  -- toggle finger/pen mode
 local SIDE_BUTTON_TAP_MAX_MS = 500   -- longer than this is a hold, not a tap
 local SIDE_BUTTON_TAP_MAX_PX = 10    -- tip movement beyond this is a drag, not a tap
+local SIDE_BUTTON_DOUBLE_TAP_MS = 400 -- second tap within this of the first opens the pen note menu
 
 -- Color picker trigger settings
 local COLOR_PICKER_DELAY_MS = 500  -- How long pen must be held still (milliseconds)
@@ -144,6 +145,7 @@ local Pencil = InputContainer:extend{
     side_button_press_time = nil,
     side_button_contact = nil,  -- Tip contact made while the button is held: {x, y, time, moved}
     side_button_used_for_highlight = false,  -- Track if button was used during a stroke
+    side_button_tap_pending = nil,  -- Scheduled single-tap action awaiting a possible second tap
 
     -- Color picker state (triggered by holding pen within 5 pixels for 5 seconds)
     color_picker_start_x = nil,  -- Initial X position when pen touched down
@@ -1286,7 +1288,7 @@ function Pencil:addToMainMenu(menu_items)
             },
             {
                 text = _("Side button tap"),
-                help_text = _("What holding the side button and tapping the page does. The stylus is only reported while it touches the screen, so a button press on its own cannot be detected. Holding the button while dragging always highlights."),
+                help_text = _("What holding the side button and tapping the page does. The stylus is only reported while it touches the screen, so a button press on its own cannot be detected. Holding the button while dragging always highlights, and holding it while double-tapping opens the pen note menu."),
                 sub_item_table = {
                     {
                         text = _("Toggle pencil/eraser"),
@@ -1576,7 +1578,7 @@ Pen slot: %10
 Pen down: %11
 
 Input mode: %12
-Side button: hold + tap the page to toggle %13, hold + drag to highlight.
+Side button: hold + tap the page to toggle %13, hold + double tap for the pen note menu, hold + drag to highlight.
 
 Enable "Input debug mode" to log raw events for diagnosis.
 
@@ -1646,12 +1648,37 @@ function Pencil:onStylusButtonRelease()
     return true
 end
 
+-- A tap waits SIDE_BUTTON_DOUBLE_TAP_MS for a second tap before it acts,
+-- so that hold + double tap can open the pen note menu.
 function Pencil:onSideButtonTap()
+    if self.side_button_tap_pending then
+        self:cancelPendingSideButtonTap()
+        self:onSideButtonDoubleTap()
+        return
+    end
+    self.side_button_tap_pending = function()
+        self.side_button_tap_pending = nil
+        self:onSideButtonSingleTap()
+    end
+    UIManager:scheduleIn(SIDE_BUTTON_DOUBLE_TAP_MS / 1000, self.side_button_tap_pending)
+end
+
+function Pencil:cancelPendingSideButtonTap()
+    if not self.side_button_tap_pending then return end
+    UIManager:unschedule(self.side_button_tap_pending)
+    self.side_button_tap_pending = nil
+end
+
+function Pencil:onSideButtonSingleTap()
     if self.side_button_tap == SIDE_BUTTON_TAP_MODE then
         self:toggleInputMode()
     else
         self:togglePenEraser()
     end
+end
+
+function Pencil:onSideButtonDoubleTap()
+    self:showNoteMenu()
 end
 
 -- Toggle between pen and eraser
@@ -4631,6 +4658,7 @@ end
 function Pencil:onCloseDocument()
     logger.info("Pencil: onCloseDocument called, strokes count =", #self.strokes)
 
+    self:cancelPendingSideButtonTap()
     if self.note_canvas then
         self.note_canvas:onClose()
     end

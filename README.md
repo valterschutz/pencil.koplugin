@@ -16,7 +16,7 @@ If you resize your book while reading it, your annotations will be WONKY. This i
 
 - **Pen tip**: Draw annotations on your ebooks
 - **Eraser end**: Flip your stylus over to erase strokes instantly
-- **Highlighter**: Hold the stylus side button and drag to highlight; hold the side button and tap the page to toggle pencil/eraser
+- **Highlighter**: Hold the stylus side button and drag to highlight; hold the side button and tap the page to toggle pencil/eraser; hold it and double-tap to open the pen note menu
 - **Finger mode**: Treat the pen tip as a finger so taps, swipes and long-presses go to KOReader instead of drawing. The eraser end still erases and holding the side button still highlights. Set **Side button tap** to *finger/pen mode* to switch modes by holding the side button and tapping the page
 - **Pen notes**: Open a blank canvas for handwritten notes attached to the current page, the current chapter, the whole book, or a highlight. Pen, side-button highlighter and eraser end work on the canvas as on a page. Close it with the X in the corner
 - **Swap Eraser/Highlighter**: Reassign which side button acts as eraser vs. highlighter from the menu
@@ -51,7 +51,7 @@ If you resize your book while reading it, your annotations will be WONKY. This i
 
 Pen notes are blank canvases stored next to the book in `pencil_notes.lua`, separate from the on-page strokes.
 
-- **Page, chapter or book note**: open the chooser from the Pencil menu (**Pen note…**) or the **Pencil: pen note…** gesture action. It tells you whether a note already exists for the current page, the current chapter (the nearest table-of-contents entry) and the book
+- **Page, chapter or book note**: open the chooser from the Pencil menu (**Pen note…**), the **Pencil: pen note…** gesture action, or by holding the side button and double-tapping the page with the pen. It tells you whether a note already exists for the current page, the current chapter (the nearest table-of-contents entry) and the book
 - **Highlight note**: long-press a highlight, tap **…** and choose **Pen note**. On a fresh text selection, **Pen note** highlights the text first and then opens the canvas
 - On the canvas the pen draws with the current pen colour and width, holding the side button draws with the highlighter and the eraser end erases. The menu icon offers undo, clear and delete; the X closes the canvas and saves it. A note that is closed empty is discarded
 - Page notes in EPUBs follow the text when the layout changes, chapter notes follow their table-of-contents entry, and highlight notes are keyed to the highlight itself

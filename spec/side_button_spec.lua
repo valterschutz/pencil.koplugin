@@ -10,6 +10,7 @@ local SIDE_BUTTON_TAP_TOOL = "tool"
 local SIDE_BUTTON_TAP_MODE = "mode"
 local SIDE_BUTTON_TAP_MAX_MS = 500
 local SIDE_BUTTON_TAP_MAX_PX = 10
+local SIDE_BUTTON_DOUBLE_TAP_MS = 400
 
 -- Mock Pencil mirroring onStylusButtonPress/Release, onSideButtonTap and
 -- the input mode helpers, with a controllable clock.
@@ -56,7 +57,44 @@ local function createMockPencil(options)
         self:saveSettings()
     end
 
+    -- Fake scheduler: pending actions fire when the clock passes their time
+    mock._scheduled = {}
+    mock._note_menus = 0
+    function mock:scheduleIn(ms, fn) table.insert(self._scheduled, { at = self.now_ms + ms, fn = fn }) end
+    function mock:unschedule(fn)
+        for i = #self._scheduled, 1, -1 do
+            if self._scheduled[i].fn == fn then table.remove(self._scheduled, i) end
+        end
+    end
+    function mock:advance(ms)
+        self.now_ms = self.now_ms + ms
+        local due = {}
+        for i = #self._scheduled, 1, -1 do
+            if self._scheduled[i].at <= self.now_ms then
+                table.insert(due, 1, table.remove(self._scheduled, i).fn)
+            end
+        end
+        for _, fn in ipairs(due) do fn() end
+    end
+    function mock:showNoteMenu() self._note_menus = self._note_menus + 1 end
+    -- Let a pending single tap fire
+    function mock:settle() self:advance(SIDE_BUTTON_DOUBLE_TAP_MS) end
+
     function mock:onSideButtonTap()
+        if self.side_button_tap_pending then
+            self:unschedule(self.side_button_tap_pending)
+            self.side_button_tap_pending = nil
+            self:showNoteMenu()
+            return
+        end
+        self.side_button_tap_pending = function()
+            self.side_button_tap_pending = nil
+            self:onSideButtonSingleTap()
+        end
+        self:scheduleIn(SIDE_BUTTON_DOUBLE_TAP_MS, self.side_button_tap_pending)
+    end
+
+    function mock:onSideButtonSingleTap()
         if self.side_button_tap == SIDE_BUTTON_TAP_MODE then
             self:toggleInputMode()
         else
@@ -140,24 +178,28 @@ describe("side button", function()
         it("quick press toggles", function()
             local p = createMockPencil()
             p:press(100)
+            p:settle()
             assert.equals("eraser", p.current_tool)
         end)
 
         it("press at the threshold still counts as a tap", function()
             local p = createMockPencil()
             p:press(SIDE_BUTTON_TAP_MAX_MS)
+            p:settle()
             assert.equals("eraser", p.current_tool)
         end)
 
         it("long hold does not toggle", function()
             local p = createMockPencil()
             p:press(SIDE_BUTTON_TAP_MAX_MS + 1)
+            p:settle()
             assert.equals("pen", p.current_tool)
         end)
 
         it("press used for highlighting does not toggle", function()
             local p = createMockPencil()
             p:press(100, true)
+            p:settle()
             assert.equals("pen", p.current_tool)
         end)
 
@@ -191,6 +233,7 @@ describe("side button", function()
         it("defaults to pencil/eraser and leaves the mode alone", function()
             local p = createMockPencil()
             p:press(100)
+            p:settle()
             assert.equals("eraser", p.current_tool)
             assert.equals(MODE_PEN, p.input_mode)
         end)
@@ -198,21 +241,25 @@ describe("side button", function()
         it("mode setting toggles finger/pen and leaves the tool alone", function()
             local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE })
             p:press(100)
+            p:settle()
             assert.equals(MODE_FINGER, p.input_mode)
             assert.equals("pen", p.current_tool)
             p:press(100)
+            p:settle()
             assert.equals(MODE_PEN, p.input_mode)
         end)
 
         it("mode toggle is persisted", function()
             local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE })
             p:press(100)
+            p:settle()
             assert.equals(1, p._saved)
         end)
 
         it("hold in finger mode does not toggle", function()
             local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE, input_mode = MODE_FINGER })
             p:press(SIDE_BUTTON_TAP_MAX_MS + 1)
+            p:settle()
             assert.equals(MODE_FINGER, p.input_mode)
             assert.equals("pen", p.current_tool)
         end)
@@ -220,6 +267,7 @@ describe("side button", function()
         it("hold used for highlighting in finger mode does not toggle", function()
             local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE, input_mode = MODE_FINGER })
             p:press(100, true)
+            p:settle()
             assert.equals(MODE_FINGER, p.input_mode)
         end)
     end)
@@ -229,17 +277,20 @@ describe("side button", function()
         it("short still contact is a tap", function()
             local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE })
             assert.is_true(p:contact(120))
+            p:settle()
             assert.equals(MODE_FINGER, p.input_mode)
         end)
 
         it("jitter within the threshold is still a tap", function()
             local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE })
             assert.is_true(p:contact(120, SIDE_BUTTON_TAP_MAX_PX, -SIDE_BUTTON_TAP_MAX_PX))
+            p:settle()
         end)
 
         it("a drag is not a tap", function()
             local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE })
             assert.is_false(p:contact(120, SIDE_BUTTON_TAP_MAX_PX + 1, 0))
+            p:settle()
             assert.equals(MODE_PEN, p.input_mode)
         end)
 
@@ -254,6 +305,7 @@ describe("side button", function()
         it("a long press on the page is not a tap", function()
             local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE })
             assert.is_false(p:contact(SIDE_BUTTON_TAP_MAX_MS + 1))
+            p:settle()
         end)
 
         it("no contact record means no tap", function()
@@ -271,14 +323,67 @@ describe("side button", function()
         it("works from finger mode back to pen mode", function()
             local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE, input_mode = MODE_FINGER })
             assert.is_true(p:contact(120))
+            p:settle()
             assert.equals(MODE_PEN, p.input_mode)
         end)
 
         it("toggles the tool under the default setting", function()
             local p = createMockPencil()
             assert.is_true(p:contact(120))
+            p:settle()
             assert.equals("eraser", p.current_tool)
             assert.equals(MODE_PEN, p.input_mode)
+        end)
+    end)
+
+    describe("hold + double tap", function()
+
+        it("a single tap acts only after the double-tap window", function()
+            local p = createMockPencil()
+            p:onStylusButtonPress()
+            p:beginSideButtonContact(100, 100)
+            p:advance(50)
+            assert.is_true(p:takeSideButtonTap())
+            p:onSideButtonTap()
+            assert.equals("pen", p.current_tool)
+            p:advance(SIDE_BUTTON_DOUBLE_TAP_MS - 1)
+            assert.equals("pen", p.current_tool)
+            p:advance(1)
+            assert.equals("eraser", p.current_tool)
+            assert.equals(0, p._note_menus)
+        end)
+
+        it("two taps within the window open the pen note menu and do not toggle", function()
+            local p = createMockPencil()
+            p:onSideButtonTap()
+            p:advance(SIDE_BUTTON_DOUBLE_TAP_MS - 1)
+            p:onSideButtonTap()
+            p:advance(SIDE_BUTTON_DOUBLE_TAP_MS * 2)
+            assert.equals(1, p._note_menus)
+            assert.equals("pen", p.current_tool)
+            assert.is_nil(p.side_button_tap_pending)
+        end)
+
+        it("two taps further apart toggle twice", function()
+            local p = createMockPencil()
+            p:onSideButtonTap()
+            p:advance(SIDE_BUTTON_DOUBLE_TAP_MS)
+            assert.equals("eraser", p.current_tool)
+            p:onSideButtonTap()
+            p:advance(SIDE_BUTTON_DOUBLE_TAP_MS)
+            assert.equals("pen", p.current_tool)
+            assert.equals(0, p._note_menus)
+        end)
+
+        it("a third tap starts a new single tap", function()
+            local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE })
+            p:onSideButtonTap()
+            p:onSideButtonTap()
+            p:onSideButtonTap()
+            assert.equals(1, p._note_menus)
+            assert.equals(MODE_PEN, p.input_mode)
+            p:settle()
+            assert.equals(MODE_FINGER, p.input_mode)
         end)
     end)
 
