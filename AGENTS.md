@@ -54,6 +54,15 @@ a KOReader stylus plugin, run on a Kobo Libra Colour (Kobo_monza) with the Kobo 
   `logger.info` lines and the traceback of a crash. Read it over USB before
   guessing.
 
+## Related plugin
+
+- `notesexport.koplugin` (`~/repos/notesexport.koplugin`) exports highlights
+  as Markdown and, with "Export everything", also calls this plugin's
+  `writeAllNoteImages(dir)` and `highlightNoteImageNames()` via
+  `ui.pencil`. Both read the notes root from the `notes_export_dir` setting
+  and name the book's subfolder the same way (`Export.safeName` of the file
+  stem); keep those two in sync.
+
 ## Planned features
 
 - Nothing queued.

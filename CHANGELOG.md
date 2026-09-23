@@ -138,6 +138,19 @@ Fork of [mysticknits/pencil.koplugin](https://github.com/mysticknits/pencil.kopl
   in the xref table, page tree, filters); the writer's output was also
   checked with pdfinfo and mutool.
 
+## 2026-09-23 (feat/export-api)
+
+- The notes root setting is now `notes_export_dir`, shared with
+  [notesexport.koplugin](https://github.com/valterschutz/notesexport.koplugin)
+  so either plugin's "Notes folder" row configures both. A folder chosen
+  under the old `pencil_note_export_dir` key has to be chosen again.
+- For that plugin's "export everything" action: `Pencil:writeAllNoteImages(dir)`
+  writes every pen note as PNGs into a folder and returns the count, and
+  `Pencil:highlightNoteImageNames()` gives the file names each highlight's
+  pen note exports to, by annotation datetime, so the Markdown can link
+  them. `noteExportPlan` (ordered notes + unique labels) backs both and the
+  menu exports.
+
 ## Planned
 
 - Nothing queued.

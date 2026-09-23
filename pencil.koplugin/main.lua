@@ -67,7 +67,7 @@ local SIDE_BUTTON_TAP_TOOL = "tool"  -- toggle pencil/eraser
 local SIDE_BUTTON_TAP_MODE = "mode"  -- toggle finger/pen mode
 local SIDE_BUTTON_TAP_MAX_MS = 500   -- longer than this is a hold, not a tap
 local SIDE_BUTTON_TAP_MAX_PX = 10    -- tip movement beyond this is a drag, not a tap
-local NOTE_EXPORT_DIR_SETTING = "pencil_note_export_dir"  -- notes root; nil means <device root>/notes
+local NOTE_EXPORT_DIR_SETTING = "notes_export_dir"  -- notes root, shared with notesexport.koplugin; nil means <device root>/notes
 local NOTE_EXPORT_DEFAULT_SUBDIR = "notes"
 local NOTE_EXPORT_NAME_MAX_CHARS = 80  -- per part of an exported file name
 local NOTE_EXPORT_PDF = "pdf"
@@ -4993,14 +4993,14 @@ function Pencil:showNoteBrowserActions(note)
                 text = _("Export as PDF"),
                 callback = function()
                     UIManager:close(dialog)
-                    self:exportNotes({ note }, NOTE_EXPORT_PDF)
+                    self:exportNotes({ note }, { self:noteExportLabel(note) }, NOTE_EXPORT_PDF)
                 end,
             }},
             {{
                 text = _("Export as PNG images"),
                 callback = function()
                     UIManager:close(dialog)
-                    self:exportNotes({ note }, NOTE_EXPORT_PNG)
+                    self:exportNotes({ note }, { self:noteExportLabel(note) }, NOTE_EXPORT_PNG)
                 end,
             }},
             {{
@@ -5138,12 +5138,22 @@ function Pencil:eachNotePageImage(note, handle)
     if not ok then error(err, 0) end
 end
 
+-- File names the pages of the note export to as images, under the label.
+function Pencil:noteImageNames(note, label)
+    local stem = Export.fileName(label, NOTE_EXPORT_NAME_MAX_CHARS)
+    local names = {}
+    for i = 1, #note.pages do
+        names[i] = Export.pageFileName(stem, i, #note.pages, NOTE_EXPORT_PNG)
+    end
+    return names
+end
+
 -- Writes one PNG per page of the note into dir. Returns the paths.
 function Pencil:writeNoteImages(note, dir, label)
-    local stem = Export.fileName(label, NOTE_EXPORT_NAME_MAX_CHARS)
+    local names = self:noteImageNames(note, label)
     local paths = {}
-    self:eachNotePageImage(note, function(bb, index, count)
-        local path = dir .. "/" .. Export.pageFileName(stem, index, count, NOTE_EXPORT_PNG)
+    self:eachNotePageImage(note, function(bb, index)
+        local path = dir .. "/" .. names[index]
         assert(tonumber(bb.stride) == bb:getWidth() * 3, "export buffer must be packed RGB")
         local ok, err = Png.encodeToFile(path, ffi.cast("const uint8_t*", bb.data), bb:getWidth(), bb:getHeight(), 3)
         assert(ok, T(_("cannot write %1: %2"), BD.filepath(path), tostring(err)))
@@ -5198,52 +5208,95 @@ function Pencil:runNoteExport(export)
     end)
 end
 
--- Exports the notes to the book's notes folder as one PDF holding every
--- page, or as one PNG image per page, named after the notes. Reports the
--- outcome in a message.
-function Pencil:exportNotes(notes, format)
+-- Writes the notes into dir as one PDF holding every page, named after a
+-- single note's label or "All notes", or as one PNG image per page under
+-- the notes' labels. Returns the page or image count and the PDF path or
+-- the folder.
+function Pencil:writeNotesExport(notes, labels, format, dir)
     assert(format == NOTE_EXPORT_PDF or format == NOTE_EXPORT_PNG, "unknown export format: " .. tostring(format))
-    assert(#notes >= 1, "no notes to export")
+    assert(#notes >= 1 and #labels == #notes, "notes and labels must match")
+    assert(util.makePath(dir), T(_("cannot create the folder %1"), BD.dirpath(dir)))
+    if format == NOTE_EXPORT_PDF then
+        local label = #notes == 1 and labels[1] or _("All notes")
+        local path = dir .. "/" .. Export.fileName(label, NOTE_EXPORT_NAME_MAX_CHARS, NOTE_EXPORT_PDF)
+        local pages = self:writeNotesPdf(notes, path)
+        logger.info("Pencil: exported", pages, "note pages to", path)
+        return pages, path
+    end
+    local count = 0
+    for i, note in ipairs(notes) do
+        count = count + #self:writeNoteImages(note, dir, labels[i])
+    end
+    logger.info("Pencil: exported", count, "note page images to", dir)
+    return count, dir
+end
+
+-- Exports the notes to the book's notes folder and reports the outcome in
+-- a message; labels name the files (see noteExportPlan).
+function Pencil:exportNotes(notes, labels, format)
     for _, note in ipairs(notes) do
         if Notes.isEmpty(note) then
             UIManager:show(InfoMessage:new{ text = T(_("The pen note \"%1\" is empty."), self:noteTitle(note)) })
             return
         end
     end
+    self:runNoteExport(function()
+        local count, target = self:writeNotesExport(notes, labels, format, self:noteExportDir())
+        if format == NOTE_EXPORT_PDF then
+            return T(_("Exported %1 pages to %2"), count, BD.filepath(target))
+        end
+        return T(_("Exported %1 images to %2"), count, BD.dirpath(target))
+    end)
+end
+
+-- Every pen note of the book in browser order with the file label of
+-- each, repeats numbered so no two notes export under the same name:
+-- { notes = {...}, labels = {...} }. nil when the notes cannot be loaded.
+function Pencil:noteExportPlan()
+    if not self:ensureNotesLoaded() then return nil end
+    local notes = Notes.browseOrder(self.notes, function(note) return self:noteLocation(note) end)
     local labels = {}
     for i, note in ipairs(notes) do
         labels[i] = self:noteExportLabel(note)
     end
-    labels = Export.uniqueLabels(labels)
-    self:runNoteExport(function()
-        local dir = self:noteExportDir()
-        assert(util.makePath(dir), T(_("cannot create the folder %1"), BD.dirpath(dir)))
-        if format == NOTE_EXPORT_PDF then
-            local label = #notes == 1 and labels[1] or _("All notes")
-            local path = dir .. "/" .. Export.fileName(label, NOTE_EXPORT_NAME_MAX_CHARS, NOTE_EXPORT_PDF)
-            local pages = self:writeNotesPdf(notes, path)
-            logger.info("Pencil: exported", pages, "note pages to", path)
-            return T(_("Exported %1 pages to %2"), pages, BD.filepath(path))
-        else
-            local count = 0
-            for i, note in ipairs(notes) do
-                count = count + #self:writeNoteImages(note, dir, labels[i])
-            end
-            logger.info("Pencil: exported", count, "note page images to", dir)
-            return T(_("Exported %1 images to %2"), count, BD.dirpath(dir))
-        end
-    end)
+    return { notes = notes, labels = Export.uniqueLabels(labels) }
 end
 
--- Every note of the book in browser order, or a message when there is none.
+-- Every note of the book, or a message when there is none.
 function Pencil:exportAllNotes(format)
-    if not self:ensureNotesLoaded() then return end
-    local notes = Notes.browseOrder(self.notes, function(note) return self:noteLocation(note) end)
-    if #notes == 0 then
+    local plan = self:noteExportPlan()
+    if not plan then return end
+    if #plan.notes == 0 then
         UIManager:show(InfoMessage:new{ text = _("This book has no pen notes.") })
         return
     end
-    self:exportNotes(notes, format)
+    self:exportNotes(plan.notes, plan.labels, format)
+end
+
+-- Writes every pen note of the book as PNG images into dir, one per page,
+-- for other plugins (notesexport.koplugin) as much as for the menu.
+-- Returns the image count, 0 when the book has no pen notes.
+function Pencil:writeAllNoteImages(dir)
+    local plan = self:noteExportPlan()
+    if not plan or #plan.notes == 0 then return 0 end
+    local count = self:writeNotesExport(plan.notes, plan.labels, NOTE_EXPORT_PNG, dir)
+    return count
+end
+
+-- The image file names the pen notes of highlights export to, by the
+-- annotation's datetime: { [datetime] = { "Highlight - ….png", ... } }.
+-- The same names writeAllNoteImages writes, so notesexport.koplugin can
+-- link them from its Markdown.
+function Pencil:highlightNoteImageNames()
+    local names = {}
+    local plan = self:noteExportPlan()
+    if not plan then return names end
+    for i, note in ipairs(plan.notes) do
+        if note.anchor.kind == Notes.KIND_HIGHLIGHT then
+            names[note.anchor.datetime] = self:noteImageNames(note, plan.labels[i])
+        end
+    end
+    return names
 end
 
 -- Format chooser for a single note.
@@ -5260,14 +5313,14 @@ function Pencil:showNoteExportMenu(note)
                 text = _("Export as PDF"),
                 callback = function()
                     UIManager:close(dialog)
-                    self:exportNotes({ note }, NOTE_EXPORT_PDF)
+                    self:exportNotes({ note }, { self:noteExportLabel(note) }, NOTE_EXPORT_PDF)
                 end,
             }},
             {{
                 text = _("Export as PNG images"),
                 callback = function()
                     UIManager:close(dialog)
-                    self:exportNotes({ note }, NOTE_EXPORT_PNG)
+                    self:exportNotes({ note }, { self:noteExportLabel(note) }, NOTE_EXPORT_PNG)
                 end,
             }},
         },
