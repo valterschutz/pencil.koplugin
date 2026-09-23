@@ -9,6 +9,7 @@ local MODE_FINGER = "finger"
 local SIDE_BUTTON_TAP_TOOL = "tool"
 local SIDE_BUTTON_TAP_MODE = "mode"
 local SIDE_BUTTON_TAP_MAX_MS = 500
+local SIDE_BUTTON_TAP_MAX_PX = 10
 
 -- Mock Pencil mirroring onStylusButtonPress/Release, onSideButtonTap and
 -- the input mode helpers, with a controllable clock.
@@ -82,6 +83,37 @@ local function createMockPencil(options)
         end
         self.side_button_used_for_highlight = false
         return true
+    end
+
+    function mock:beginSideButtonContact(x, y)
+        self.side_button_contact = { x = x, y = y, time = self.now_ms, moved = false }
+    end
+
+    function mock:trackSideButtonContact(x, y)
+        local c = self.side_button_contact
+        if not c or c.moved then return end
+        if math.abs(x - c.x) > SIDE_BUTTON_TAP_MAX_PX or math.abs(y - c.y) > SIDE_BUTTON_TAP_MAX_PX then
+            c.moved = true
+        end
+    end
+
+    function mock:takeSideButtonTap()
+        local c = self.side_button_contact
+        self.side_button_contact = nil
+        if not c or c.moved then return false end
+        return (self.now_ms - c.time) <= SIDE_BUTTON_TAP_MAX_MS
+    end
+
+    -- Simulate the tip touching at (x, y) with the button held, moving by
+    -- (dx, dy) over held_ms, then lifting. Returns whether it was a tap.
+    function mock:contact(held_ms, dx, dy)
+        self:onStylusButtonPress()
+        self:beginSideButtonContact(100, 100)
+        self.now_ms = self.now_ms + held_ms
+        self:trackSideButtonContact(100 + (dx or 0), 100 + (dy or 0))
+        local tapped = self:takeSideButtonTap()
+        if tapped then self:onSideButtonTap() end
+        return tapped
     end
 
     -- Simulate a press held for held_ms, optionally drawing while held
@@ -173,6 +205,64 @@ describe("side button", function()
             local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE, input_mode = MODE_FINGER })
             p:press(100, true)
             assert.equals(MODE_FINGER, p.input_mode)
+        end)
+    end)
+
+    describe("hold + tap the page", function()
+
+        it("short still contact is a tap", function()
+            local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE })
+            assert.is_true(p:contact(120))
+            assert.equals(MODE_FINGER, p.input_mode)
+        end)
+
+        it("jitter within the threshold is still a tap", function()
+            local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE })
+            assert.is_true(p:contact(120, SIDE_BUTTON_TAP_MAX_PX, -SIDE_BUTTON_TAP_MAX_PX))
+        end)
+
+        it("a drag is not a tap", function()
+            local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE })
+            assert.is_false(p:contact(120, SIDE_BUTTON_TAP_MAX_PX + 1, 0))
+            assert.equals(MODE_PEN, p.input_mode)
+        end)
+
+        it("movement stays remembered even if the tip returns", function()
+            local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE })
+            p:beginSideButtonContact(100, 100)
+            p:trackSideButtonContact(150, 100)
+            p:trackSideButtonContact(100, 100)
+            assert.is_false(p:takeSideButtonTap())
+        end)
+
+        it("a long press on the page is not a tap", function()
+            local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE })
+            assert.is_false(p:contact(SIDE_BUTTON_TAP_MAX_MS + 1))
+        end)
+
+        it("no contact record means no tap", function()
+            local p = createMockPencil()
+            assert.is_false(p:takeSideButtonTap())
+        end)
+
+        it("the record is consumed", function()
+            local p = createMockPencil()
+            p:beginSideButtonContact(100, 100)
+            assert.is_true(p:takeSideButtonTap())
+            assert.is_false(p:takeSideButtonTap())
+        end)
+
+        it("works from finger mode back to pen mode", function()
+            local p = createMockPencil({ side_button_tap = SIDE_BUTTON_TAP_MODE, input_mode = MODE_FINGER })
+            assert.is_true(p:contact(120))
+            assert.equals(MODE_PEN, p.input_mode)
+        end)
+
+        it("toggles the tool under the default setting", function()
+            local p = createMockPencil()
+            assert.is_true(p:contact(120))
+            assert.equals("eraser", p.current_tool)
+            assert.equals(MODE_PEN, p.input_mode)
         end)
     end)
 

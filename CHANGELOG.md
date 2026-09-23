@@ -16,10 +16,14 @@ Fork of [mysticknits/pencil.koplugin](https://github.com/mysticknits/pencil.kopl
   The eraser end still erases and holding the side button still highlights.
   Menu checkbox under Pencil, and a "Pencil: toggle finger/pen mode" gesture
   action. The mode persists across books.
-- "Side button tap" setting: a quick press toggles pencil/eraser (upstream
-  default) or finger/pen mode.
-- A side-button press held longer than 500 ms no longer counts as a tap, in
-  either mode.
+- "Side button tap" setting: holding the side button and tapping the page
+  toggles pencil/eraser (upstream default) or finger/pen mode. The tap is a
+  contact under 500 ms that moves under 10 px; anything else is a highlight
+  drag. The tap cancels the highlight it would otherwise have created.
+- Found while testing: the Kobo Libra Colour reports the stylus only while
+  the tip touches the screen, so a bare side-button press never reaches
+  KOReader. The release-based quick-press toggle is kept for hardware that
+  does report it, and now requires the press to last under 500 ms.
 - `spec/side_button_spec.lua` covers the tap/hold decision and mode switching.
 
 ## Planned

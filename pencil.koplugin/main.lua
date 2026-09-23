@@ -46,10 +46,13 @@ local TOOL_ERASER = "eraser"
 local MODE_PEN = "pen"
 local MODE_FINGER = "finger"
 
--- What a quick side-button press does
+-- What a side-button tap does. Kobo only reports the stylus while the tip
+-- touches the screen, so a bare button press never reaches KOReader; the
+-- tap gesture is therefore "hold the side button and tap the page".
 local SIDE_BUTTON_TAP_TOOL = "tool"  -- toggle pencil/eraser
 local SIDE_BUTTON_TAP_MODE = "mode"  -- toggle finger/pen mode
-local SIDE_BUTTON_TAP_MAX_MS = 500   -- held longer than this is not a tap
+local SIDE_BUTTON_TAP_MAX_MS = 500   -- longer than this is a hold, not a tap
+local SIDE_BUTTON_TAP_MAX_PX = 10    -- tip movement beyond this is a drag, not a tap
 
 -- Color picker trigger settings
 local COLOR_PICKER_DELAY_MS = 500  -- How long pen must be held still (milliseconds)
@@ -135,6 +138,7 @@ local Pencil = InputContainer:extend{
     side_button_tap = SIDE_BUTTON_TAP_TOOL,
     side_button_down = false,
     side_button_press_time = nil,
+    side_button_contact = nil,  -- Tip contact made while the button is held: {x, y, time, moved}
     side_button_used_for_highlight = false,  -- Track if button was used during a stroke
 
     -- Color picker state (triggered by holding pen within 5 pixels for 5 seconds)
@@ -484,10 +488,19 @@ function Pencil:handleStylusSlot(input, slot)
         local current_slot_id = slot.id or -1
         if current_slot_id >= 0 and not self.highlighting then
             self:startTextHighlight(slot.x or 0, slot.y or 0)
+            if self.highlighting then
+                self:beginSideButtonContact(slot.x or 0, slot.y or 0)
+            end
         elseif current_slot_id >= 0 and self.highlighting then
+            self:trackSideButtonContact(slot.x or 0, slot.y or 0)
             self:extendTextHighlight(slot.x or 0, slot.y or 0)
         elseif current_slot_id < 0 and self.highlighting then
-            self:finishTextHighlight()
+            if self:takeSideButtonTap() then
+                self:cancelTextHighlight()
+                self:onSideButtonTap()
+            else
+                self:finishTextHighlight()
+            end
         end
         return true
     end
@@ -607,6 +620,11 @@ function Pencil:handleStylusSlot(input, slot)
             local x, y = self:transformCoordinates(raw_x, raw_y)
             self.pen_x = x
             self.pen_y = y
+            -- The eraser end was diverted above, so any non-pen tool type
+            -- here means input.lua saw the side button held.
+            if self.side_button_down or slot.tool == TOOL_TYPE_HIGHLIGHTER or slot.tool == TOOL_TYPE_ERASER then
+                self:beginSideButtonContact(raw_x, raw_y)
+            end
             -- Only track picker state and schedule the 10Hz poll when the
             -- hold-pen-still gesture would actually produce something to
             -- show. Skipping these when both experimental pickers are off
@@ -627,6 +645,7 @@ function Pencil:handleStylusSlot(input, slot)
             -- Pen is moving
             local raw_x = slot.x or self.pen_x
             local raw_y = slot.y or self.pen_y
+            self:trackSideButtonContact(raw_x, raw_y)
             local x, y = self:transformCoordinates(raw_x, raw_y)
             if x ~= self.pen_x or y ~= self.pen_y then
                 -- Check if pen moved more than tolerance from start position
@@ -648,7 +667,12 @@ function Pencil:handleStylusSlot(input, slot)
         if self.pen_down and not self.erasing then
             self.pen_down = false
             self:cancelColorPickerTimer()
-            self:endRawStroke()
+            if self:takeSideButtonTap() then
+                self:discardRawStroke()
+                self:onSideButtonTap()
+            else
+                self:endRawStroke()
+            end
             if self.input_debug_mode then
                 self:writeDebugLog("=== PEN UP ===")
             end
@@ -656,6 +680,38 @@ function Pencil:handleStylusSlot(input, slot)
     end
 
     return true  -- Dominate: remove from gesture detection
+end
+
+-- Side-button tap detection. The tip must touch the page for the stylus to
+-- report anything, so a "tap" is a contact made while the button is held
+-- that lifts within SIDE_BUTTON_TAP_MAX_MS having moved at most
+-- SIDE_BUTTON_TAP_MAX_PX. Anything longer or further is a highlight drag.
+function Pencil:beginSideButtonContact(raw_x, raw_y)
+    self.side_button_contact = { x = raw_x, y = raw_y, time = time.now(), moved = false }
+end
+
+function Pencil:trackSideButtonContact(raw_x, raw_y)
+    local c = self.side_button_contact
+    if not c or c.moved then return end
+    if math.abs(raw_x - c.x) > SIDE_BUTTON_TAP_MAX_PX or math.abs(raw_y - c.y) > SIDE_BUTTON_TAP_MAX_PX then
+        c.moved = true
+    end
+end
+
+-- Consume the contact record. True when the contact qualified as a tap.
+function Pencil:takeSideButtonTap()
+    local c = self.side_button_contact
+    self.side_button_contact = nil
+    if not c or c.moved then return false end
+    return time.to_ms(time.now() - c.time) <= SIDE_BUTTON_TAP_MAX_MS
+end
+
+-- Drop the stroke in progress without saving it and repaint over its pixels.
+function Pencil:discardRawStroke()
+    self.current_stroke = nil
+    self.dirty_region = nil
+    UIManager:setDirty(self.view, "ui")
+    logger.dbg("Pencil: raw stroke discarded")
 end
 
 -- Teardown stylus callback
@@ -903,6 +959,18 @@ function Pencil:extendTextHighlight(raw_x, raw_y)
         -- Repaint preview with the new sboxes.
         self:_paintTempSelection()
     end
+end
+
+-- Abandon the in-progress selection without saving it and reset.
+function Pencil:cancelTextHighlight()
+    self:_clearTempSelection()
+    local rh = self.ui and self.ui.highlight
+    if rh and rh.clear then
+        pcall(rh.clear, rh)
+    end
+    self.highlighting = false
+    self.pen_down = false
+    logger.dbg("Pencil: text highlight cancelled")
 end
 
 -- Persist the current selection as a KOReader highlight annotation and reset.
@@ -1163,7 +1231,7 @@ function Pencil:addToMainMenu(menu_items)
             },
             {
                 text = _("Finger mode"),
-                help_text = _("Treat the pen tip as a finger: taps, swipes and long-presses go to KOReader instead of drawing. The eraser end still erases and holding the side button still highlights. Set \"Side button tap\" to finger/pen mode to switch with the stylus button."),
+                help_text = _("Treat the pen tip as a finger: taps, swipes and long-presses go to KOReader instead of drawing. The eraser end still erases and holding the side button still highlights. Set \"Side button tap\" to finger/pen mode to switch by holding the side button and tapping the page."),
                 checked_func = function()
                     return self:isFingerMode()
                 end,
@@ -1184,7 +1252,7 @@ function Pencil:addToMainMenu(menu_items)
             },
             {
                 text = _("Side button tap"),
-                help_text = _("What a quick press of the stylus side button does. Holding it while dragging always highlights."),
+                help_text = _("What holding the side button and tapping the page does. The stylus is only reported while it touches the screen, so a button press on its own cannot be detected. Holding the button while dragging always highlights."),
                 sub_item_table = {
                     {
                         text = _("Toggle pencil/eraser"),
@@ -1466,7 +1534,7 @@ Pen slot: %10
 Pen down: %11
 
 Input mode: %12
-Side button: tap to toggle %13, hold+drag to highlight.
+Side button: hold + tap the page to toggle %13, hold + drag to highlight.
 
 Enable "Input debug mode" to log raw events for diagnosis.
 
@@ -1494,8 +1562,10 @@ end
 -- Handle stylus button press (down event)
 -- Side button behavior:
 --   - Hold + drag = temporarily highlight (in both input modes), then return to original tool
---   - Quick press (no drawing while held, released within SIDE_BUTTON_TAP_MAX_MS)
---     = toggle pencil/eraser or finger/pen mode, per the "Side button tap" setting
+--   - Hold + tap the page (see takeSideButtonTap) = toggle pencil/eraser or
+--     finger/pen mode, per the "Side button tap" setting
+--   - Quick press with no contact, released within SIDE_BUTTON_TAP_MAX_MS = same
+--     toggle, on hardware that reports the button without contact (Kobo does not)
 function Pencil:onStylusButtonPress()
     if not self:isEnabled() or self:isOverlayActive() then return false end
 
