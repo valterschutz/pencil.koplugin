@@ -4543,6 +4543,8 @@ function Pencil:openNote(anchor)
         pencil = self,
         note = note,
         title = self:noteTitle(note),
+        tap_max_ms = SIDE_BUTTON_TAP_MAX_MS,
+        tap_max_px = SIDE_BUTTON_TAP_MAX_PX,
         on_delete = function(canvas)
             self:confirmDeleteNote(note, canvas)
         end,
@@ -4576,9 +4578,7 @@ function Pencil:confirmDeleteNote(note, canvas)
         text = T(_("Delete the pen note \"%1\"?"), self:noteTitle(note)),
         ok_text = _("Delete"),
         ok_callback = function()
-            for i = #note.strokes, 1, -1 do
-                note.strokes[i] = nil
-            end
+            Notes.clearNote(note)
             canvas.changed = true
             canvas:onClose()
         end,

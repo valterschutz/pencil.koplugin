@@ -93,6 +93,62 @@ describe("Notes", function()
         it("requires a timestamp for a new note", function()
             assert.has_error(function() Notes.newNote({ kind = "book" }) end)
         end)
+
+        it("rejects notes without pages", function()
+            assert.has_error(function() Notes.add(Notes.newStore(), { anchor = { kind = "book" }, strokes = {} }) end)
+            assert.has_error(function() Notes.add(Notes.newStore(), { anchor = { kind = "book" }, pages = {} }) end)
+        end)
+    end)
+
+    describe("pages", function()
+        it("starts with one blank page and adds pages after a given one", function()
+            local note = Notes.newNote({ kind = "book" }, 1)
+            assert.equals(1, #note.pages)
+            assert.is_true(Notes.isPageEmpty(note.pages[1]))
+            local last, last_index = Notes.addPage(note)
+            assert.equals(2, last_index)
+            assert.equals(last, note.pages[2])
+            local middle, middle_index = Notes.addPage(note, 1)
+            assert.equals(2, middle_index)
+            assert.equals(middle, note.pages[2])
+            assert.equals(last, note.pages[3])
+            assert.has_error(function() Notes.addPage(note, 4) end)
+        end)
+
+        it("is empty only when every page is blank", function()
+            local note = Notes.newNote({ kind = "book" }, 1)
+            Notes.addPage(note)
+            assert.is_true(Notes.isEmpty(note))
+            table.insert(note.pages[2].strokes, stroke(1, 1))
+            assert.is_false(Notes.isEmpty(note))
+        end)
+
+        it("prunes blank pages but keeps one", function()
+            local note = Notes.newNote({ kind = "book" }, 1)
+            Notes.addPage(note)
+            Notes.addPage(note)
+            table.insert(note.pages[2].strokes, stroke(1, 1))
+            assert.equals(2, Notes.prunePages(note))
+            assert.equals(1, #note.pages)
+            assert.equals(1, note.pages[1].strokes[1].points[1].x)
+
+            local blank = Notes.newNote({ kind = "book" }, 1)
+            Notes.addPage(blank)
+            assert.equals(1, Notes.prunePages(blank))
+            assert.equals(1, #blank.pages)
+            assert.equals(0, Notes.prunePages(blank))
+        end)
+
+        it("clears a note down to one blank page in place", function()
+            local note = Notes.newNote({ kind = "book" }, 1)
+            local pages = note.pages
+            table.insert(note.pages[1].strokes, stroke(1, 1))
+            Notes.addPage(note)
+            Notes.clearNote(note)
+            assert.equals(pages, note.pages)
+            assert.equals(1, #note.pages)
+            assert.is_true(Notes.isEmpty(note))
+        end)
     end)
 
     describe("eraseAt / restore", function()
@@ -136,34 +192,54 @@ describe("Notes", function()
         it("round-trips notes through the stroke converters", function()
             local store = Notes.newStore()
             local note = Notes.add(store, Notes.newNote({ kind = "page", page = 2, xpointer = "/p" }, 42))
-            table.insert(note.strokes, stroke(1, 2))
+            table.insert(note.pages[1].strokes, stroke(1, 2))
+            Notes.addPage(note)  -- blank, left out on disk
+            Notes.addPage(note)
+            table.insert(note.pages[3].strokes, stroke(3, 4))
             local saved = Notes.toSaveable(store, strip)
             assert.equals(Notes.VERSION, saved.version)
-            assert.is_nil(saved.notes[1].strokes[1].color)
+            assert.equals(2, #saved.notes[1].pages)
+            assert.is_nil(saved.notes[1].pages[1].strokes[1].color)
             assert.equals(42, saved.notes[1].datetime)
 
             local loaded = Notes.fromSaved(saved, restore)
             assert.equals(1, #loaded.notes)
             assert.same({ kind = "page", page = 2, xpointer = "/p" }, loaded.notes[1].anchor)
-            assert.equals("cdata", loaded.notes[1].strokes[1].color)
-            assert.equals(1, loaded.notes[1].strokes[1].points[1].x)
+            assert.equals(2, #loaded.notes[1].pages)
+            assert.equals("cdata", loaded.notes[1].pages[1].strokes[1].color)
+            assert.equals(1, loaded.notes[1].pages[1].strokes[1].points[1].x)
+            assert.equals(3, loaded.notes[1].pages[2].strokes[1].points[1].x)
+        end)
+
+        it("loads version 1 notes with a flat strokes array as one page", function()
+            local data = {
+                version = 1,
+                notes = { { anchor = { kind = "book" }, datetime = 7, strokes = { stroke(1, 1), stroke(2, 2) } } },
+            }
+            local loaded = Notes.fromSaved(data, restore)
+            assert.equals(1, #loaded.notes)
+            assert.equals(1, #loaded.notes[1].pages)
+            assert.equals(2, #loaded.notes[1].pages[1].strokes)
+            assert.equals(7, loaded.notes[1].datetime)
         end)
 
         it("drops empty and malformed notes and tolerates garbage input", function()
             local data = {
                 version = 1,
                 notes = {
-                    { anchor = { kind = "book" }, strokes = {} },
-                    { anchor = { kind = "nope" }, strokes = { stroke(1, 1) } },
+                    { anchor = { kind = "book" }, pages = {} },
+                    { anchor = { kind = "book" }, pages = { { strokes = {} }, "junk", { nostrokes = true } } },
+                    { anchor = { kind = "nope" }, pages = { { strokes = { stroke(1, 1) } } } },
                     { anchor = { kind = "page", page = 1 } },
                     "junk",
-                    { anchor = { kind = "book" }, strokes = { stroke(1, 1) } },
+                    { anchor = { kind = "book" }, pages = { { strokes = {} }, { strokes = { stroke(1, 1) } } } },
                 },
             }
             local loaded = Notes.fromSaved(data, restore)
             assert.equals(1, #loaded.notes)
             assert.equals("book", loaded.notes[1].anchor.kind)
             assert.equals(0, loaded.notes[1].datetime)
+            assert.equals(1, #loaded.notes[1].pages)
 
             assert.equals(0, #Notes.fromSaved(nil, restore).notes)
             assert.equals(0, #Notes.fromSaved({ notes = "x" }, restore).notes)

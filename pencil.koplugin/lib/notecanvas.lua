@@ -1,11 +1,17 @@
 --[[--
-Full-screen blank canvas for a pen note.
+Full-screen canvas for a pen note, one note page at a time.
 
 The Pencil plugin routes raw stylus slots here while the canvas is the
 topmost widget (see Pencil:handleStylusSlot), so the pen tip draws, the
 side button highlights and the eraser end erases exactly as on a page.
-Finger input only reaches the title bar: the X closes the canvas and the
-menu icon offers undo, clear and delete.
+Holding the side button and tapping toggles finger/pen mode; in finger
+mode the bare tip is left to gesture detection, like a finger.
+
+Fingers (and the tip in finger mode) swipe between pages: a swipe to the
+right on the last page adds a blank one, a swipe to the left goes back.
+The hardware page buttons do the same. The title bar shows the page
+count, the X closes the canvas and the menu icon offers undo, clear,
+the mode toggle and delete.
 
 @module pencil.lib.notecanvas
 --]]--
@@ -14,6 +20,7 @@ local Blitbuffer = require("ffi/blitbuffer")
 local ButtonDialog = require("ui/widget/buttondialog")
 local Device = require("device")
 local Geom = require("ui/geometry")
+local GestureRange = require("ui/gesturerange")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local Notes = require("lib/notes")
 local TitleBar = require("ui/widget/titlebar")
@@ -21,6 +28,7 @@ local UIManager = require("ui/uimanager")
 local logger = require("logger")
 local time = require("ui/time")
 local _ = require("gettext")
+local T = require("ffi/util").template
 local Screen = Device.screen
 
 -- Linux input tool types, as promoted by the patched input.lua
@@ -35,9 +43,11 @@ local REFRESH_INTERVAL_MS = 16
 local ERASE_THRESHOLD_PX = 20
 
 local NoteCanvas = InputContainer:extend{
-    pencil = nil,        -- Pencil plugin: tool settings, stroke rendering, coordinate transform
-    note = nil,          -- Notes record; its strokes array is edited in place
+    pencil = nil,        -- Pencil plugin: tool settings, input mode, stroke rendering, coordinate transform
+    note = nil,          -- Notes record; its pages are edited in place
     title = "",
+    tap_max_ms = nil,    -- side-button contact shorter than this and ...
+    tap_max_px = nil,    -- ... moving less than this is a tap, not a highlight
     on_close = nil,      -- function(canvas, changed)
     on_delete = nil,     -- function(canvas); the canvas closes itself afterwards
     covers_fullscreen = true,
@@ -45,15 +55,19 @@ local NoteCanvas = InputContainer:extend{
 
 function NoteCanvas:init()
     assert(self.pencil, "NoteCanvas needs the Pencil plugin")
-    assert(self.note and self.note.strokes, "NoteCanvas needs a note")
+    assert(self.note and self.note.pages and #self.note.pages >= 1, "NoteCanvas needs a note with pages")
+    assert(type(self.tap_max_ms) == "number" and self.tap_max_ms > 0, "NoteCanvas needs tap_max_ms")
+    assert(type(self.tap_max_px) == "number" and self.tap_max_px >= 0, "NoteCanvas needs tap_max_px")
     assert(type(self.on_close) == "function", "NoteCanvas needs an on_close callback")
 
+    self.page_index = 1
     self.dimen = Geom:new{ x = 0, y = 0, w = Screen:getWidth(), h = Screen:getHeight() }
     self.title_bar = TitleBar:new{
         width = self.dimen.w,
         fullscreen = true,
         align = "left",
         title = self.title,
+        subtitle = self:pageLabel(),
         with_bottom_line = true,
         left_icon = "appbar.menu",
         left_icon_tap_callback = function() self:showMenu() end,
@@ -63,23 +77,53 @@ function NoteCanvas:init()
     self[1] = self.title_bar
     self.canvas_top = self.title_bar:getHeight()
 
-    self.undo_stack = {}
+    self.undo_stacks = {}  -- page table -> list of undo entries
     self.changed = false
     self.current_stroke = nil
     self.pen_down = false
     self.title_bar_contact = false
+    self.contact = nil     -- { x, y, time, moved, highlighter } for the tip contact in progress
     self.dirty_region = nil
     self.last_refresh_time = 0
 
+    self.ges_events = {
+        Swipe = { GestureRange:new{ ges = "swipe", range = self.dimen } },
+    }
     if Device:hasKeys() then
-        self.key_events = { Close = { { Device.input.group.Back } } }
+        self.key_events = {
+            Close = { { Device.input.group.Back } },
+            NextPage = { { Device.input.group.PgFwd } },
+            PrevPage = { { Device.input.group.PgBack } },
+        }
     end
+end
+
+function NoteCanvas:currentPage()
+    return self.note.pages[self.page_index]
+end
+
+function NoteCanvas:strokes()
+    return self:currentPage().strokes
+end
+
+function NoteCanvas:undoStack()
+    local page = self:currentPage()
+    local stack = self.undo_stacks[page]
+    if not stack then
+        stack = {}
+        self.undo_stacks[page] = stack
+    end
+    return stack
+end
+
+function NoteCanvas:pageLabel()
+    return T(_("Page %1 of %2"), self.page_index, #self.note.pages)
 end
 
 function NoteCanvas:paintTo(bb, x, y)
     bb:paintRect(x, y, self.dimen.w, self.dimen.h, Blitbuffer.COLOR_WHITE)
     self.title_bar:paintTo(bb, x, y)
-    for _, stroke in ipairs(self.note.strokes) do
+    for _, stroke in ipairs(self:strokes()) do
         self.pencil:renderStroke(bb, stroke)
     end
     if self.current_stroke then
@@ -90,7 +134,8 @@ end
 -- Stylus entry point. slot = {id, x, y, tool}; id < 0 means the tip lifted.
 -- Returns true to keep the pen out of gesture detection. A contact that
 -- starts on the title bar is handed to gesture detection instead, lift
--- included, so the pen can tap the X and the menu icon.
+-- included, so the pen can tap the X and the menu icon. In finger mode
+-- the bare tip is handed over as well, so it swipes and taps like a finger.
 function NoteCanvas:handleStylusSlot(slot)
     if not (slot.id and slot.id >= 0) then
         if self.title_bar_contact then
@@ -103,19 +148,23 @@ function NoteCanvas:handleStylusSlot(slot)
     if self.title_bar_contact then
         return false
     end
-    local x, y = self.pencil:transformCoordinates(slot.x or 0, slot.y or 0)
-    if not self.pen_down and y < self.canvas_top then
-        self.title_bar_contact = true
-        return false
-    end
     local swap = self.pencil.swap_eraser_and_highlighter
     local eraser_type = swap and TOOL_TYPE_HIGHLIGHTER or TOOL_TYPE_ERASER
     local highlighter_type = swap and TOOL_TYPE_ERASER or TOOL_TYPE_HIGHLIGHTER
-    if slot.tool == eraser_type then
+    local is_eraser = slot.tool == eraser_type
+    local is_highlighter = slot.tool == highlighter_type
+    local x, y = self.pencil:transformCoordinates(slot.x or 0, slot.y or 0)
+    if not self.pen_down then
+        if y < self.canvas_top or (self.pencil:isFingerMode() and not (is_eraser or is_highlighter)) then
+            self.title_bar_contact = true
+            return false
+        end
+    end
+    if is_eraser then
         self:penUp()
         self:eraseAt(x, y)
     elseif not self.pen_down then
-        self:penDown(x, y, slot.tool == highlighter_type)
+        self:penDown(x, y, is_highlighter)
     else
         self:penMove(x, y)
     end
@@ -140,6 +189,7 @@ function NoteCanvas:penDown(x, y, highlighter)
         datetime = os.time(),
     }
     self.pen_down = true
+    self.contact = { x = x, y = y, time = time.now(), moved = false, highlighter = highlighter }
     self.last_refresh_time = time.now()
     self.dirty_region = nil
     self:addPoint(x, y)
@@ -151,6 +201,10 @@ function NoteCanvas:penMove(x, y)
         self:penUp()
         return
     end
+    local c = self.contact
+    if c and not c.moved and (math.abs(x - c.x) > self.tap_max_px or math.abs(y - c.y) > self.tap_max_px) then
+        c.moved = true
+    end
     local points = self.current_stroke.points
     local last = points[#points]
     if last.x ~= x or last.y ~= y then
@@ -158,14 +212,29 @@ function NoteCanvas:penMove(x, y)
     end
 end
 
+-- Whether the contact that just ended was a hold + tap: side button held,
+-- lifted within tap_max_ms having moved at most tap_max_px.
+function NoteCanvas:takeSideButtonTap()
+    local c = self.contact
+    self.contact = nil
+    if not (c and c.highlighter) or c.moved then return false end
+    return time.to_ms(time.now() - c.time) <= self.tap_max_ms
+end
+
 function NoteCanvas:penUp()
     if not self.pen_down then return end
     self.pen_down = false
     local stroke = self.current_stroke
     self.current_stroke = nil
+    if self:takeSideButtonTap() then
+        self.dirty_region = nil
+        self:repaint()
+        self.pencil:toggleInputMode()
+        return
+    end
     if stroke and #stroke.points >= 1 then
-        table.insert(self.note.strokes, stroke)
-        table.insert(self.undo_stack, { type = "add" })
+        table.insert(self:strokes(), stroke)
+        table.insert(self:undoStack(), { type = "add" })
         self.changed = true
     end
     self:flushDirtyRegion()
@@ -233,28 +302,28 @@ end
 
 function NoteCanvas:eraseAt(x, y)
     if not self:isInDrawingArea(x, y) then return end
-    local removed = Notes.eraseAt(self.note.strokes, x, y, ERASE_THRESHOLD_PX)
+    local removed = Notes.eraseAt(self:strokes(), x, y, ERASE_THRESHOLD_PX)
     if not removed then return end
-    table.insert(self.undo_stack, { type = "delete", removed = removed })
+    table.insert(self:undoStack(), { type = "delete", removed = removed })
     self.changed = true
     self:repaint()
 end
 
 function NoteCanvas:undo()
-    local entry = table.remove(self.undo_stack)
+    local entry = table.remove(self:undoStack())
     if not entry then return end
     if entry.type == "add" then
-        table.remove(self.note.strokes)
+        table.remove(self:strokes())
     else
-        Notes.restore(self.note.strokes, entry.removed)
+        Notes.restore(self:strokes(), entry.removed)
     end
     self.changed = true
     self:repaint()
 end
 
 function NoteCanvas:clear()
-    if Notes.isEmpty(self.note) then return end
-    local strokes = self.note.strokes
+    local strokes = self:strokes()
+    if #strokes == 0 then return end
     local removed = {}
     for i, stroke in ipairs(strokes) do
         removed[i] = { index = i, stroke = stroke }
@@ -262,9 +331,51 @@ function NoteCanvas:clear()
     for i = #strokes, 1, -1 do
         strokes[i] = nil
     end
-    table.insert(self.undo_stack, { type = "delete", removed = removed })
+    table.insert(self:undoStack(), { type = "delete", removed = removed })
     self.changed = true
     self:repaint()
+end
+
+function NoteCanvas:goToPage(index)
+    assert(index >= 1 and index <= #self.note.pages, "page index out of range: " .. tostring(index))
+    self:penUp()
+    self.page_index = index
+    self.title_bar:setSubTitle(self:pageLabel(), true)
+    self:repaint()
+end
+
+-- Forward past the last page adds a blank one; blank pages are dropped
+-- again when the canvas closes.
+function NoteCanvas:nextPage()
+    if self.page_index == #self.note.pages then
+        Notes.addPage(self.note)
+    end
+    self:goToPage(self.page_index + 1)
+    return true
+end
+
+function NoteCanvas:prevPage()
+    if self.page_index > 1 then
+        self:goToPage(self.page_index - 1)
+    end
+    return true
+end
+
+function NoteCanvas:onSwipe(_, ges)
+    if ges.direction == "east" then
+        return self:nextPage()
+    elseif ges.direction == "west" then
+        return self:prevPage()
+    end
+    return false
+end
+
+function NoteCanvas:onNextPage()
+    return self:nextPage()
+end
+
+function NoteCanvas:onPrevPage()
+    return self:prevPage()
 end
 
 function NoteCanvas:repaint()
@@ -276,18 +387,25 @@ function NoteCanvas:showMenu()
     local buttons = {
         {{
             text = _("Undo last stroke"),
-            enabled = #self.undo_stack > 0,
+            enabled = #self:undoStack() > 0,
             callback = function()
                 UIManager:close(dialog)
                 self:undo()
             end,
         }},
         {{
-            text = _("Clear canvas"),
-            enabled = not Notes.isEmpty(self.note),
+            text = _("Clear page"),
+            enabled = #self:strokes() > 0,
             callback = function()
                 UIManager:close(dialog)
                 self:clear()
+            end,
+        }},
+        {{
+            text = self.pencil:isFingerMode() and _("Switch to pen mode") or _("Switch to finger mode"),
+            callback = function()
+                UIManager:close(dialog)
+                self.pencil:toggleInputMode()
             end,
         }},
     }
@@ -310,7 +428,8 @@ end
 function NoteCanvas:onClose()
     self:penUp()
     UIManager:close(self, "flashui")
-    logger.dbg("NoteCanvas: closed, changed =", self.changed, "strokes =", #self.note.strokes)
+    Notes.prunePages(self.note)
+    logger.dbg("NoteCanvas: closed, changed =", self.changed, "pages =", #self.note.pages)
     self.on_close(self, self.changed)
     return true
 end

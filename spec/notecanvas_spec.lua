@@ -55,13 +55,21 @@ preload("device", {
     input = { group = { Back = "Back" } },
 })
 preload("ui/geometry", { new = function(_, o) return o end })
+preload("ui/gesturerange", { new = function(_, o) return o end })
 preload("ui/widget/container/inputcontainer", stubClass())
 preload("ui/widget/titlebar", {
     new = function(_, o)
         o.getHeight = function() return TITLE_H end
         o.paintTo = function() end
         o.free = function() end
+        o.setSubTitle = function(self, text) self.subtitle = text end
         return o
+    end,
+})
+preload("ffi/util", {
+    template = function(fmt, ...)
+        local args = { ... }
+        return (fmt:gsub("%%(%d)", function(i) return tostring(args[tonumber(i)]) end))
     end,
 })
 preload("ui/uimanager", {
@@ -77,10 +85,20 @@ preload("ui/time", {
 preload("gettext", function(s) return s end)
 
 local NoteCanvas = require("lib/notecanvas")
+local Notes = require("lib/notes")
+
+local TAP_MAX_MS, TAP_MAX_PX = 500, 10
 
 local function newPencil()
     return {
         swap_eraser_and_highlighter = false,
+        finger_mode = false,
+        mode_toggles = 0,
+        isFingerMode = function(self) return self.finger_mode end,
+        toggleInputMode = function(self)
+            self.finger_mode = not self.finger_mode
+            self.mode_toggles = self.mode_toggles + 1
+        end,
         tool_settings = {
             pen = { width = 3, color = "black", color_name = "Black", alpha = 255 },
             highlighter = { width = 20, color = "yellow", alpha = 128 },
@@ -98,12 +116,17 @@ local function newCanvas(note)
     local closed = {}
     local canvas = NoteCanvas:new{
         pencil = newPencil(),
-        note = note or { anchor = { kind = "book" }, datetime = 1, strokes = {} },
+        note = note or Notes.newNote({ kind = "book" }, 1),
         title = "Book note",
+        tap_max_ms = TAP_MAX_MS,
+        tap_max_px = TAP_MAX_PX,
         on_close = function(_, changed) table.insert(closed, changed) end,
     }
     return canvas, closed
 end
+
+local function strokes(canvas) return canvas:strokes() end
+local function swipe(canvas, direction) return canvas:onSwipe(nil, { direction = direction }) end
 
 local PEN, ERASER, HIGHLIGHTER = 1, 2, 3
 local function down(canvas, x, y, tool) canvas:handleStylusSlot({ id = 0, x = x, y = y, tool = tool or PEN }) end
@@ -116,10 +139,22 @@ describe("NoteCanvas", function()
         ui.shown, ui.closed, ui.dirty = {}, {}, 0
     end)
 
-    it("requires the plugin, a note and a close callback", function()
-        assert.has_error(function() NoteCanvas:new{ note = { strokes = {} }, on_close = function() end } end)
-        assert.has_error(function() NoteCanvas:new{ pencil = newPencil(), on_close = function() end } end)
-        assert.has_error(function() NoteCanvas:new{ pencil = newPencil(), note = { strokes = {} } } end)
+    it("requires the plugin, a note with pages, tap thresholds and a close callback", function()
+        local function try(o)
+            o.pencil = o.pencil == nil and newPencil() or o.pencil
+            if o.note == nil then o.note = Notes.newNote({ kind = "book" }, 1) end
+            if o.tap_max_ms == nil then o.tap_max_ms = TAP_MAX_MS end
+            if o.tap_max_px == nil then o.tap_max_px = TAP_MAX_PX end
+            if o.on_close == nil then o.on_close = function() end end
+            return function() NoteCanvas:new(o) end
+        end
+        assert.has_no.errors(try({}))
+        assert.has_error(try({ pencil = false }))
+        assert.has_error(try({ note = false }))
+        assert.has_error(try({ note = { anchor = { kind = "book" }, strokes = {} } }))
+        assert.has_error(try({ tap_max_ms = false }))
+        assert.has_error(try({ tap_max_px = false }))
+        assert.has_error(try({ on_close = false }))
     end)
 
     it("turns a pen drag into one stroke and marks the note changed", function()
@@ -131,13 +166,13 @@ describe("NoteCanvas", function()
         down(canvas, 120, 220)
         up(canvas)
         assert.is_false(canvas.pen_down)
-        assert.equals(1, #canvas.note.strokes)
-        assert.equals(3, #canvas.note.strokes[1].points)
-        assert.equals("pen", canvas.note.strokes[1].tool)
-        assert.equals(3, canvas.note.strokes[1].width)
+        assert.equals(1, #strokes(canvas))
+        assert.equals(3, #strokes(canvas)[1].points)
+        assert.equals("pen", strokes(canvas)[1].tool)
+        assert.equals(3, strokes(canvas)[1].width)
         assert.equals(2, canvas.pencil.segments)
         assert.is_true(canvas.changed)
-        assert.equals(1, #canvas.undo_stack)
+        assert.equals(1, #canvas:undoStack())
     end)
 
     it("dominates the stylus over the drawing area", function()
@@ -155,13 +190,13 @@ describe("NoteCanvas", function()
         assert.is_false(canvas:handleStylusSlot({ id = 0, x = 100, y = TITLE_H + 50, tool = PEN }))
         assert.is_false(canvas.pen_down)
         assert.is_false(canvas:handleStylusSlot({ id = -1, tool = PEN }))
-        assert.equals(0, #canvas.note.strokes)
+        assert.equals(0, #strokes(canvas))
         assert.is_false(canvas.changed)
         -- the next contact draws again
         down(canvas, 100, 500)
         assert.is_true(canvas.pen_down)
         up(canvas)
-        assert.equals(1, #canvas.note.strokes)
+        assert.equals(1, #strokes(canvas))
     end)
 
     it("ends the stroke when the pen leaves the drawing area", function()
@@ -170,8 +205,8 @@ describe("NoteCanvas", function()
         down(canvas, 100, 400)
         down(canvas, 100, 10)
         assert.is_false(canvas.pen_down)
-        assert.equals(1, #canvas.note.strokes)
-        assert.equals(2, #canvas.note.strokes[1].points)
+        assert.equals(1, #strokes(canvas))
+        assert.equals(2, #strokes(canvas)[1].points)
     end)
 
     it("draws a highlighter stroke while the side button is held", function()
@@ -179,8 +214,8 @@ describe("NoteCanvas", function()
         down(canvas, 100, 500, HIGHLIGHTER)
         down(canvas, 200, 500, HIGHLIGHTER)
         up(canvas)
-        assert.equals("highlighter", canvas.note.strokes[1].tool)
-        assert.equals(20, canvas.note.strokes[1].width)
+        assert.equals("highlighter", strokes(canvas)[1].tool)
+        assert.equals(20, strokes(canvas)[1].width)
         assert.equals(1, canvas.pencil.highlighter_segments)
         assert.equals(0, canvas.pencil.segments)
     end)
@@ -193,13 +228,13 @@ describe("NoteCanvas", function()
         up(canvas)
         canvas.changed = false
         down(canvas, 105, 505, ERASER)
-        assert.equals(1, #canvas.note.strokes)
-        assert.equals(600, canvas.note.strokes[1].points[1].x)
+        assert.equals(1, #strokes(canvas))
+        assert.equals(600, strokes(canvas)[1].points[1].x)
         assert.is_true(canvas.changed)
         assert.equals(1, ui.dirty)
         canvas:undo()
-        assert.equals(2, #canvas.note.strokes)
-        assert.equals(100, canvas.note.strokes[1].points[1].x)
+        assert.equals(2, #strokes(canvas))
+        assert.equals(100, strokes(canvas)[1].points[1].x)
     end)
 
     it("honours the swapped eraser/highlighter setting", function()
@@ -208,9 +243,9 @@ describe("NoteCanvas", function()
         down(canvas, 100, 500, ERASER)
         down(canvas, 200, 500, ERASER)
         up(canvas)
-        assert.equals("highlighter", canvas.note.strokes[1].tool)
+        assert.equals("highlighter", strokes(canvas)[1].tool)
         down(canvas, 100, 500, HIGHLIGHTER)
-        assert.equals(0, #canvas.note.strokes)
+        assert.equals(0, #strokes(canvas))
     end)
 
     it("undoes strokes in order and clears the canvas reversibly", function()
@@ -218,19 +253,19 @@ describe("NoteCanvas", function()
         down(canvas, 100, 500) up(canvas)
         down(canvas, 300, 500) up(canvas)
         canvas:undo()
-        assert.equals(1, #canvas.note.strokes)
-        assert.equals(100, canvas.note.strokes[1].points[1].x)
+        assert.equals(1, #strokes(canvas))
+        assert.equals(100, strokes(canvas)[1].points[1].x)
         down(canvas, 300, 500) up(canvas)
-        local strokes = canvas.note.strokes
+        local page_strokes = strokes(canvas)
         canvas:clear()
-        assert.equals(strokes, canvas.note.strokes)
-        assert.equals(0, #canvas.note.strokes)
+        assert.equals(page_strokes, strokes(canvas))
+        assert.equals(0, #strokes(canvas))
         canvas:undo()
-        assert.equals(2, #canvas.note.strokes)
+        assert.equals(2, #strokes(canvas))
         canvas:undo()
         canvas:undo()
         canvas:undo()  -- empty stack is harmless
-        assert.equals(0, #canvas.note.strokes)
+        assert.equals(0, #strokes(canvas))
     end)
 
     it("refreshes the touched area at most every 16 ms and on lift", function()
@@ -255,7 +290,7 @@ describe("NoteCanvas", function()
         local canvas, closed = newCanvas()
         down(canvas, 100, 500)
         canvas:onClose()
-        assert.equals(1, #canvas.note.strokes)
+        assert.equals(1, #strokes(canvas))
         assert.same({ true }, closed)
         assert.equals(canvas, ui.closed[1])
 
@@ -267,9 +302,163 @@ describe("NoteCanvas", function()
     it("offers delete only when a handler is given", function()
         local canvas = newCanvas()
         canvas:showMenu()
-        assert.equals(2, #ui.shown[1].buttons)
+        assert.equals(3, #ui.shown[1].buttons)
         canvas.on_delete = function() end
         canvas:showMenu()
-        assert.equals(3, #ui.shown[2].buttons)
+        assert.equals(4, #ui.shown[2].buttons)
+    end)
+
+    describe("pages", function()
+        it("starts on page 1 with the count in the subtitle", function()
+            local canvas = newCanvas()
+            assert.equals(1, canvas.page_index)
+            assert.equals("Page 1 of 1", canvas.title_bar.subtitle)
+        end)
+
+        it("adds a page on a swipe east past the last page and navigates back and forth", function()
+            local canvas = newCanvas()
+            down(canvas, 100, 500) up(canvas)
+            assert.is_true(swipe(canvas, "east"))
+            assert.equals(2, canvas.page_index)
+            assert.equals(2, #canvas.note.pages)
+            assert.equals(0, #strokes(canvas))
+            assert.equals("Page 2 of 2", canvas.title_bar.subtitle)
+            down(canvas, 200, 600) up(canvas)
+            assert.is_true(swipe(canvas, "west"))
+            assert.equals(1, canvas.page_index)
+            assert.equals(100, strokes(canvas)[1].points[1].x)
+            assert.equals("Page 1 of 2", canvas.title_bar.subtitle)
+            assert.is_true(swipe(canvas, "east"))
+            assert.equals(2, canvas.page_index)
+            assert.equals(2, #canvas.note.pages)
+            assert.equals(200, strokes(canvas)[1].points[1].x)
+        end)
+
+        it("stays on the first page on a swipe west and ignores other directions", function()
+            local canvas = newCanvas()
+            assert.is_true(swipe(canvas, "west"))
+            assert.equals(1, canvas.page_index)
+            assert.is_false(swipe(canvas, "north"))
+            assert.equals(1, #canvas.note.pages)
+        end)
+
+        it("turns pages with the page buttons", function()
+            local canvas = newCanvas()
+            assert.is_true(canvas:onNextPage())
+            assert.equals(2, canvas.page_index)
+            assert.is_true(canvas:onPrevPage())
+            assert.equals(1, canvas.page_index)
+        end)
+
+        it("finishes the stroke in progress when the page turns", function()
+            local canvas = newCanvas()
+            down(canvas, 100, 500)
+            down(canvas, 110, 510)
+            swipe(canvas, "east")
+            assert.is_false(canvas.pen_down)
+            assert.equals(1, #canvas.note.pages[1].strokes)
+            assert.equals(0, #strokes(canvas))
+        end)
+
+        it("keeps undo and clear per page", function()
+            local canvas = newCanvas()
+            down(canvas, 100, 500) up(canvas)
+            swipe(canvas, "east")
+            down(canvas, 200, 600) up(canvas)
+            down(canvas, 300, 600) up(canvas)
+            canvas:undo()
+            assert.equals(1, #strokes(canvas))
+            assert.equals(1, #canvas.note.pages[1].strokes)
+            canvas:clear()
+            assert.equals(0, #strokes(canvas))
+            assert.equals(1, #canvas.note.pages[1].strokes)
+            swipe(canvas, "west")
+            canvas:undo()
+            assert.equals(0, #strokes(canvas))
+            canvas:undo()  -- nothing left on page 1
+            assert.equals(0, #strokes(canvas))
+            swipe(canvas, "east")
+            canvas:undo()
+            assert.equals(1, #strokes(canvas))
+        end)
+
+        it("drops blank pages on close but keeps one", function()
+            local canvas, closed = newCanvas()
+            down(canvas, 100, 500) up(canvas)
+            swipe(canvas, "east")
+            swipe(canvas, "east")
+            assert.equals(3, #canvas.note.pages)
+            canvas:onClose()
+            assert.equals(1, #canvas.note.pages)
+            assert.same({ true }, closed)
+
+            local blank = newCanvas()
+            swipe(blank, "east")
+            blank:onClose()
+            assert.equals(1, #blank.note.pages)
+        end)
+    end)
+
+    describe("finger mode", function()
+        it("toggles the mode on hold + tap and discards the dot", function()
+            local canvas = newCanvas()
+            down(canvas, 100, 500, HIGHLIGHTER)
+            down(canvas, 104, 503, HIGHLIGHTER)
+            clock.now = TAP_MAX_MS
+            up(canvas)
+            assert.equals(1, canvas.pencil.mode_toggles)
+            assert.is_true(canvas.pencil.finger_mode)
+            assert.equals(0, #strokes(canvas))
+            assert.is_false(canvas.changed)
+            assert.equals(1, ui.dirty)
+        end)
+
+        it("keeps a long or moving side-button contact as a highlight", function()
+            local canvas = newCanvas()
+            down(canvas, 100, 500, HIGHLIGHTER)
+            clock.now = TAP_MAX_MS + 1
+            up(canvas)
+            assert.equals(0, canvas.pencil.mode_toggles)
+            assert.equals(1, #strokes(canvas))
+            clock.now = 0
+            down(canvas, 100, 500, HIGHLIGHTER)
+            down(canvas, 100 + TAP_MAX_PX + 1, 500, HIGHLIGHTER)
+            up(canvas)
+            assert.equals(0, canvas.pencil.mode_toggles)
+            assert.equals(2, #strokes(canvas))
+        end)
+
+        it("does not treat a bare pen tap as a mode toggle", function()
+            local canvas = newCanvas()
+            down(canvas, 100, 500) up(canvas)
+            assert.equals(0, canvas.pencil.mode_toggles)
+            assert.equals(1, #strokes(canvas))
+        end)
+
+        it("passes the bare tip through in finger mode, but still highlights and erases", function()
+            local canvas = newCanvas()
+            canvas.pencil.finger_mode = true
+            assert.is_false(canvas:handleStylusSlot({ id = 0, x = 100, y = 500, tool = PEN }))
+            assert.is_false(canvas:handleStylusSlot({ id = 0, x = 300, y = 500, tool = PEN }))
+            assert.is_false(canvas:handleStylusSlot({ id = -1, tool = PEN }))
+            assert.equals(0, #strokes(canvas))
+            assert.is_true(canvas:handleStylusSlot({ id = 0, x = 100, y = 500, tool = HIGHLIGHTER }))
+            clock.now = TAP_MAX_MS + 1
+            assert.is_true(canvas:handleStylusSlot({ id = -1, tool = HIGHLIGHTER }))
+            assert.equals("highlighter", strokes(canvas)[1].tool)
+            assert.is_true(canvas:handleStylusSlot({ id = 0, x = 100, y = 500, tool = ERASER }))
+            assert.is_true(canvas:handleStylusSlot({ id = -1, tool = ERASER }))
+            assert.equals(0, #strokes(canvas))
+        end)
+
+        it("offers the mode toggle in the menu", function()
+            local canvas = newCanvas()
+            canvas:showMenu()
+            assert.equals("Switch to finger mode", ui.shown[1].buttons[3][1].text)
+            ui.shown[1].buttons[3][1].callback()
+            assert.is_true(canvas.pencil.finger_mode)
+            canvas:showMenu()
+            assert.equals("Switch to pen mode", ui.shown[2].buttons[3][1].text)
+        end)
     end)
 end)

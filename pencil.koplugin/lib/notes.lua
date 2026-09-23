@@ -3,7 +3,9 @@ Pen notes: blank canvases attached to the book, a chapter, a page or a
 highlight. Pure functions over plain tables so the store can be tested
 without KOReader.
 
-A note is { anchor = <anchor>, datetime = <os.time()>, strokes = {...} }.
+A note is { anchor = <anchor>, datetime = <os.time()>, pages = { <page>, ... } }
+with at least one page; a page is { strokes = {...} }. Version 1 stored a
+single flat strokes array, which loads as a one-page note.
 Anchor shapes:
   book:      { kind = "book" }
   chapter:   { kind = "chapter", page = N, xpointer = str|nil, title = str }
@@ -19,7 +21,7 @@ local Geometry = require("lib/geometry")
 
 local Notes = {}
 
-Notes.VERSION = 1
+Notes.VERSION = 2
 Notes.KIND_BOOK = "book"
 Notes.KIND_CHAPTER = "chapter"
 Notes.KIND_PAGE = "page"
@@ -52,10 +54,58 @@ function Notes.newStore()
     return { version = Notes.VERSION, notes = {} }
 end
 
+function Notes.newPage()
+    return { strokes = {} }
+end
+
 function Notes.newNote(anchor, now)
     Notes.assertAnchor(anchor)
     assert(type(now) == "number", "now must be a timestamp")
-    return { anchor = anchor, datetime = now, strokes = {} }
+    return { anchor = anchor, datetime = now, pages = { Notes.newPage() } }
+end
+
+local function assertNote(note)
+    assert(type(note) == "table" and note.anchor and type(note.pages) == "table" and #note.pages >= 1,
+        "not a note")
+end
+
+--- Inserts a blank page after page `after` (default: at the end).
+-- Returns the new page and its index.
+function Notes.addPage(note, after)
+    assertNote(note)
+    after = after or #note.pages
+    assert(type(after) == "number" and after >= 0 and after <= #note.pages,
+        "page index out of range: " .. tostring(after))
+    local page = Notes.newPage()
+    table.insert(note.pages, after + 1, page)
+    return page, after + 1
+end
+
+function Notes.isPageEmpty(page)
+    return #page.strokes == 0
+end
+
+--- Drops blank pages, keeping at least one so the note stays openable.
+-- Returns the number of pages removed.
+function Notes.prunePages(note)
+    assertNote(note)
+    local removed = 0
+    for i = #note.pages, 1, -1 do
+        if #note.pages > 1 and Notes.isPageEmpty(note.pages[i]) then
+            table.remove(note.pages, i)
+            removed = removed + 1
+        end
+    end
+    return removed
+end
+
+--- Empties the note in place: one blank page, nothing else.
+function Notes.clearNote(note)
+    assertNote(note)
+    for i = #note.pages, 1, -1 do
+        note.pages[i] = nil
+    end
+    note.pages[1] = Notes.newPage()
 end
 
 local function identityPage(anchor)
@@ -99,7 +149,7 @@ function Notes.find(store, anchor, resolve_page)
 end
 
 function Notes.add(store, note)
-    assert(note.anchor and note.strokes, "not a note")
+    assertNote(note)
     table.insert(store.notes, note)
     return note
 end
@@ -116,7 +166,10 @@ function Notes.remove(store, note)
 end
 
 function Notes.isEmpty(note)
-    return #note.strokes == 0
+    for _, page in ipairs(note.pages) do
+        if not Notes.isPageEmpty(page) then return false end
+    end
+    return true
 end
 
 --- Removes every stroke within threshold pixels of (x, y).
@@ -141,23 +194,45 @@ function Notes.restore(strokes, removed)
     end
 end
 
---- Store as written to disk. convert(stroke) strips non-serialisable
--- fields (colors are cdata); see Pencil:strokeToSaveable.
+local function convertStrokes(strokes, convert)
+    local out = {}
+    for i, stroke in ipairs(strokes) do
+        out[i] = convert(stroke)
+    end
+    return out
+end
+
+--- Store as written to disk, blank pages left out. convert(stroke) strips
+-- non-serialisable fields (colors are cdata); see Pencil:strokeToSaveable.
 function Notes.toSaveable(store, convert)
     local notes = {}
     for i, note in ipairs(store.notes) do
-        local strokes = {}
-        for j, stroke in ipairs(note.strokes) do
-            strokes[j] = convert(stroke)
+        local pages = {}
+        for _, page in ipairs(note.pages) do
+            if not Notes.isPageEmpty(page) then
+                table.insert(pages, { strokes = convertStrokes(page.strokes, convert) })
+            end
         end
-        notes[i] = { anchor = note.anchor, datetime = note.datetime, strokes = strokes }
+        notes[i] = { anchor = note.anchor, datetime = note.datetime, pages = pages }
     end
     return { version = Notes.VERSION, notes = notes }
 end
 
-local function isValidSavedNote(saved)
-    if type(saved) ~= "table" or type(saved.strokes) ~= "table" then return false end
-    return pcall(Notes.assertAnchor, saved.anchor)
+-- Pages of a saved note with their strokes converted, blank and malformed
+-- pages left out. Version 1 notes carry a flat strokes array.
+local function loadPages(saved, convert)
+    local saved_pages = saved.pages
+    if type(saved_pages) ~= "table" and type(saved.strokes) == "table" then
+        saved_pages = { { strokes = saved.strokes } }
+    end
+    if type(saved_pages) ~= "table" then return {} end
+    local pages = {}
+    for _, page in ipairs(saved_pages) do
+        if type(page) == "table" and type(page.strokes) == "table" and #page.strokes > 0 then
+            table.insert(pages, { strokes = convertStrokes(page.strokes, convert) })
+        end
+    end
+    return pages
 end
 
 --- Store rebuilt from disk data. Malformed or empty notes are dropped;
@@ -168,16 +243,15 @@ function Notes.fromSaved(data, convert)
         return store
     end
     for _, saved in ipairs(data.notes) do
-        if isValidSavedNote(saved) and #saved.strokes > 0 then
-            local strokes = {}
-            for j, stroke in ipairs(saved.strokes) do
-                strokes[j] = convert(stroke)
+        if type(saved) == "table" and pcall(Notes.assertAnchor, saved.anchor) then
+            local pages = loadPages(saved, convert)
+            if #pages > 0 then
+                table.insert(store.notes, {
+                    anchor = saved.anchor,
+                    datetime = saved.datetime or 0,
+                    pages = pages,
+                })
             end
-            table.insert(store.notes, {
-                anchor = saved.anchor,
-                datetime = saved.datetime or 0,
-                strokes = strokes,
-            })
         end
     end
     return store

@@ -18,7 +18,7 @@ If you resize your book while reading it, your annotations will be WONKY. This i
 - **Eraser end**: Flip your stylus over to erase strokes instantly
 - **Highlighter**: Hold the stylus side button and drag to highlight; hold the side button and tap the page to toggle pencil/eraser; hold it and double-tap to open the pen note menu
 - **Finger mode**: Treat the pen tip as a finger so taps, swipes and long-presses go to KOReader instead of drawing. The eraser end still erases and holding the side button still highlights. Set **Side button tap** to *finger/pen mode* to switch modes by holding the side button and tapping the page
-- **Pen notes**: Open a blank canvas for handwritten notes attached to the current page, the current chapter, the whole book, or a highlight. Pen, side-button highlighter and eraser end work on the canvas as on a page. Close it with the X in the corner
+- **Pen notes**: Open a blank canvas for handwritten notes attached to the current page, the current chapter, the whole book, or a highlight. A note can span several pages: swipe to turn them, swipe past the last one to add a page. Pen, side-button highlighter and eraser end work on the canvas as on a page. Close it with the X in the corner
 - **Swap Eraser/Highlighter**: Reassign which side button acts as eraser vs. highlighter from the menu
 - **Undo**: Undo your last stroke or eraser action
 - **Clear strokes**: Clear annotations for the current page or the entire document
@@ -53,7 +53,9 @@ Pen notes are blank canvases stored next to the book in `pencil_notes.lua`, sepa
 
 - **Page, chapter or book note**: open the chooser from the Pencil menu (**Pen note…**), the **Pencil: pen note…** gesture action, or by holding the side button and double-tapping the page with the pen. It tells you whether a note already exists for the current page, the current chapter (the nearest table-of-contents entry) and the book
 - **Highlight note**: long-press a highlight, tap **…** and choose **Pen note**. On a fresh text selection, **Pen note** highlights the text first and then opens the canvas
-- On the canvas the pen draws with the current pen colour and width, holding the side button draws with the highlighter and the eraser end erases. The menu icon offers undo, clear and delete; the X closes the canvas and saves it. A note that is closed empty is discarded
+- On the canvas the pen draws with the current pen colour and width, holding the side button draws with the highlighter and the eraser end erases. The menu icon offers undo, clear page, the finger/pen mode switch and delete; the X closes the canvas and saves it. A note that is closed empty is discarded
+- A note has as many pages as you need. The title bar shows **Page x of y**. Swipe right (or press the forward page button) to go to the next page; on the last page this adds a blank one. Swipe left (or press the back page button) to go back. Blank pages are dropped when the note is closed
+- Holding the side button and tapping the canvas switches between finger and pen mode, as does the menu. In finger mode the bare pen tip swipes between pages and taps the title bar like a finger, while the side button still highlights and the eraser end still erases
 - Page notes in EPUBs follow the text when the layout changes, chapter notes follow their table-of-contents entry, and highlight notes are keyed to the highlight itself
 
 ## Questions or Issues with the Plugin
