@@ -290,4 +290,47 @@ describe("Notes", function()
             assert.has_error(function() Notes.snippet("x", 0) end)
         end)
     end)
+
+    describe("browseOrder", function()
+        local function note(anchor, datetime)
+            return { anchor = anchor, datetime = datetime or 0, pages = { Notes.newPage() } }
+        end
+        local function stored(n) return n.anchor.page end
+
+        it("puts the book note first, then notes by page with chapter, page, highlight order", function()
+            local store = Notes.newStore()
+            local h5 = Notes.add(store, note({ kind = "highlight", datetime = "d", page = 5 }))
+            local p5 = Notes.add(store, note({ kind = "page", page = 5 }))
+            local book = Notes.add(store, note({ kind = "book" }))
+            local c5 = Notes.add(store, note({ kind = "chapter", page = 5, title = "c" }))
+            local p2 = Notes.add(store, note({ kind = "page", page = 2 }))
+            assert.same({ book, p2, c5, p5, h5 }, Notes.browseOrder(store, stored))
+            assert.equals(h5, store.notes[1])
+        end)
+
+        it("uses the located page rather than the stored one", function()
+            local store = Notes.newStore()
+            local a = Notes.add(store, note({ kind = "page", page = 1, xpointer = "/a" }))
+            local b = Notes.add(store, note({ kind = "page", page = 9, xpointer = "/b" }))
+            local moved = { ["/a"] = 20, ["/b"] = 3 }
+            assert.same({ b, a }, Notes.browseOrder(store, function(n) return moved[n.anchor.xpointer] end))
+        end)
+
+        it("orders equal locations by creation time and puts unlocated notes last", function()
+            local store = Notes.newStore()
+            local lost = Notes.add(store, note({ kind = "highlight", datetime = "x" }, 1))
+            local later = Notes.add(store, note({ kind = "page", page = 4 }, 30))
+            local earlier = Notes.add(store, note({ kind = "page", page = 4, xpointer = "/e" }, 10))
+            assert.same({ earlier, later, lost }, Notes.browseOrder(store, stored))
+        end)
+
+        it("never asks for the location of the book note and checks the locator", function()
+            local store = Notes.newStore()
+            Notes.add(store, note({ kind = "book" }))
+            Notes.browseOrder(store, function() error("asked") end)
+            Notes.add(store, note({ kind = "page", page = 1 }))
+            assert.has_error(function() Notes.browseOrder(store, function() return "1" end) end)
+            assert.has_error(function() Notes.browseOrder(store, nil) end)
+        end)
+    end)
 end)

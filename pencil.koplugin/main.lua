@@ -11,6 +11,7 @@ local CenterContainer = require("ui/widget/container/centercontainer")
 local DataStorage = require("datastorage")
 local Device = require("device")
 local Dispatcher = require("dispatcher")
+local Event = require("ui/event")
 local FrameContainer = require("ui/widget/container/framecontainer")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
@@ -29,6 +30,7 @@ local Screen = Device.screen
 local Size = require("ui/size")
 local InfoMessage = require("ui/widget/infomessage")
 local InputContainer = require("ui/widget/container/inputcontainer")
+local Menu = require("ui/widget/menu")
 local UIManager = require("ui/uimanager")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local lfs = require("libs/libkoreader-lfs")
@@ -170,6 +172,7 @@ local Pencil = InputContainer:extend{
     notes = nil,          -- Notes store, see lib/notes.lua
     notes_loaded = false, -- set true once the sidecar file was read (or found absent)
     note_canvas = nil,    -- open NoteCanvas widget, or nil
+    note_browser = nil,   -- open note browser (a CenterContainer holding a Menu), or nil
     note_marker = nil,    -- { page = <current page>, shown = bool }, see Pencil:renderNoteMarker
     noted_highlights = nil,  -- Notes.highlightIds of the store, see Pencil:notedHighlights
     highlight_note_mark_sign = nil,  -- TextWidget drawing HIGHLIGHT_NOTE_MARK_GLYPH
@@ -290,6 +293,12 @@ function Pencil:init()
         title = _("Pencil: pen note…"),
         reader = true,
     })
+    Dispatcher:registerAction("pencil_note_browser", {
+        category = "none",
+        event = "PencilNoteBrowser",
+        title = _("Pencil: browse pen notes"),
+        reader = true,
+    })
     Dispatcher:registerAction("pencil_undo", {
         category = "none",
         event = "PencilUndo",
@@ -370,6 +379,11 @@ end
 
 function Pencil:onPencilNoteMenu()
     self:showNoteMenu()
+    return true
+end
+
+function Pencil:onPencilNoteBrowser()
+    self:showNoteBrowser()
     return true
 end
 
@@ -1333,6 +1347,13 @@ function Pencil:addToMainMenu(menu_items)
                 help_text = _("Open a blank canvas for handwritten notes attached to this page, this chapter or the whole book. Notes on a highlight are opened from the highlight menu. Notes are stored next to the book. The \"Pencil: pen note…\" gesture action opens the same chooser."),
                 callback = function()
                     self:showNoteMenu()
+                end,
+            },
+            {
+                text = _("Browse pen notes"),
+                help_text = _("List every pen note of this book in reading order. Tap a note to open it; long-press it to go to its place in the book or to delete it."),
+                callback = function()
+                    self:showNoteBrowser()
                 end,
                 separator = true,
             },
@@ -4402,6 +4423,7 @@ end
 -- the anchor rules live in lib/notes.lua, the widget in lib/notecanvas.lua.
 
 local NOTE_TITLE_MAX_CHARS = 40
+local NOTE_BROWSER_SNIPPET_MAX_CHARS = 60  -- of the highlighted text in a browser row
 
 function Pencil:getNotesFilePath()
     local sidecar_dir = self.ui and self.ui.doc_settings and self.ui.doc_settings.doc_sidecar_dir
@@ -4524,6 +4546,38 @@ function Pencil:highlightAnchor(index)
         page = item.pageno or self:getPageNumber(item.page),
         text = item.text,
     }
+end
+
+-- The stored annotation with this datetime and its index, or nil once the
+-- highlight has been deleted.
+function Pencil:annotationByDatetime(datetime)
+    local annotations = self.ui.annotation and self.ui.annotation.annotations
+    if not annotations then return nil end
+    for index, item in ipairs(annotations) do
+        if item.datetime == datetime then return item, index end
+    end
+    return nil
+end
+
+-- The note's anchor as it is now: a highlight note follows its annotation,
+-- whose text and page may have changed since the note was created. Falls
+-- back to the stored anchor when the highlight is gone.
+function Pencil:liveAnchor(note)
+    if note.anchor.kind == Notes.KIND_HIGHLIGHT then
+        local _, index = self:annotationByDatetime(note.anchor.datetime)
+        local anchor = index and self:highlightAnchor(index)
+        if anchor then return anchor end
+    end
+    return note.anchor
+end
+
+-- Page the note belongs to in the current layout, or nil for the book note
+-- and for notes whose place cannot be determined.
+function Pencil:noteLocation(note)
+    local anchor = self:liveAnchor(note)
+    if anchor.kind == Notes.KIND_BOOK then return nil end
+    local page = self:resolveAnchorPage(anchor)
+    return type(page) == "number" and page or nil
 end
 
 function Pencil:noteTitle(note)
@@ -4716,9 +4770,11 @@ function Pencil:refreshFingerModeMarker()
 end
 
 -- Opens the canvas for the anchor, creating the note if there is none. An
--- untouched new note is dropped again when the canvas closes.
-function Pencil:openNote(anchor)
+-- untouched new note is dropped again when the canvas closes. on_closed, if
+-- given, runs once the canvas is gone and the store is saved.
+function Pencil:openNote(anchor, on_closed)
     assert(anchor, "openNote needs an anchor")
+    assert(on_closed == nil or type(on_closed) == "function", "on_closed must be a function")
     if self.note_canvas then return end
     if not self:ensureNotesLoaded() then return end
 
@@ -4749,6 +4805,9 @@ function Pencil:openNote(anchor)
             self:invalidateNoteMarker()
             if changed then
                 self:saveNotes()
+            end
+            if on_closed then
+                on_closed()
             end
         end,
     }
@@ -4812,9 +4871,165 @@ function Pencil:showNoteMenu()
             row(self:bookAnchor(),
                 _("New note for this book"),
                 _("Open note for this book")),
+            {{
+                text = _("Browse all pen notes"),
+                enabled = #self.notes.notes > 0,
+                callback = function()
+                    UIManager:close(dialog)
+                    self:showNoteBrowser()
+                end,
+            }},
         },
     }
     UIManager:show(dialog)
+end
+
+-- Row label in the note browser: the note title, with the highlighted text
+-- for highlight notes and the page count for multi-page notes.
+function Pencil:noteBrowserLabel(note)
+    local anchor = self:liveAnchor(note)
+    local label
+    if anchor.kind == Notes.KIND_HIGHLIGHT and type(anchor.text) == "string" and anchor.text ~= "" then
+        label = T(_("Highlight: \"%1\""), Notes.snippet(anchor.text, NOTE_BROWSER_SNIPPET_MAX_CHARS))
+    else
+        label = self:noteTitle(note)
+    end
+    if #note.pages > 1 then
+        label = T(_("%1 (%2 pages)"), label, #note.pages)
+    end
+    return label
+end
+
+-- Moves the reader to the note's place in the book, with the previous
+-- location pushed so the back gesture returns. Returns false for the book
+-- note and for notes without a known place.
+function Pencil:gotoNoteLocation(note)
+    local anchor = note.anchor
+    local target, marker
+    if anchor.kind == Notes.KIND_HIGHLIGHT then
+        local item = self:annotationByDatetime(anchor.datetime)
+        if item then
+            target, marker = item.page, item.pos0
+        else
+            target = anchor.page
+        end
+    elseif anchor.kind ~= Notes.KIND_BOOK then
+        target = self.ui.rolling and anchor.xpointer or anchor.page
+    end
+    if target == nil then return false end
+    if self.ui.link and self.ui.link.addCurrentLocationToStack then
+        self.ui.link:addCurrentLocationToStack()
+    end
+    local event = type(target) == "string" and "GotoXPointer" or "GotoPage"
+    self.ui:handleEvent(Event:new(event, target, marker))
+    return true
+end
+
+function Pencil:closeNoteBrowser()
+    if not self.note_browser then return end
+    UIManager:close(self.note_browser)
+    self.note_browser = nil
+end
+
+-- Long-press actions for a browser row: go to the note's place, delete it.
+function Pencil:showNoteBrowserActions(note)
+    local dialog
+    dialog = ButtonDialog:new{
+        title = self:noteBrowserLabel(note),
+        buttons = {
+            {{
+                text = _("Go to location"),
+                enabled = self:noteLocation(note) ~= nil,
+                callback = function()
+                    UIManager:close(dialog)
+                    self:closeNoteBrowser()
+                    self:gotoNoteLocation(note)
+                end,
+            }},
+            {{
+                text = _("Delete note"),
+                callback = function()
+                    UIManager:close(dialog)
+                    UIManager:show(ConfirmBox:new{
+                        text = T(_("Delete the pen note \"%1\"?"), self:noteTitle(note)),
+                        ok_text = _("Delete"),
+                        ok_callback = function()
+                            Notes.remove(self.notes, note)
+                            self:invalidateNoteMarker()
+                            self:saveNotes()
+                            self:closeNoteBrowser()
+                            self:showNoteBrowser()
+                        end,
+                    })
+                end,
+            }},
+        },
+    }
+    UIManager:show(dialog)
+end
+
+-- Full-screen list of every pen note of the book in reading order (see
+-- Notes.browseOrder). Tapping a row opens the note and the list comes back
+-- when the canvas closes; long-pressing offers to go to the note's location
+-- or to delete it. focus_note, if given and still present, is the note whose
+-- page of the list is shown first.
+function Pencil:showNoteBrowser(focus_note)
+    if self.note_canvas or self.note_browser then return end
+    if not self:ensureNotesLoaded() then return end
+
+    local location = {}
+    local notes = Notes.browseOrder(self.notes, function(note)
+        location[note] = self:noteLocation(note)
+        return location[note]
+    end)
+    if #notes == 0 then
+        UIManager:show(InfoMessage:new{ text = _("This book has no pen notes.") })
+        return
+    end
+    local items = {}
+    for i, note in ipairs(notes) do
+        items[i] = {
+            text = self:noteBrowserLabel(note),
+            mandatory = location[note] and tostring(location[note]) or "",
+            note = note,
+        }
+    end
+
+    local container = CenterContainer:new{
+        dimen = Screen:getSize(),
+        covers_fullscreen = true,
+    }
+    local menu = Menu:new{
+        title = T(_("Pen notes (%1)"), #notes),
+        item_table = items,
+        is_borderless = true,
+        is_popout = false,
+        title_bar_fm_style = true,
+        show_parent = container,
+        close_callback = function()
+            self:closeNoteBrowser()
+        end,
+    }
+    function menu.onMenuSelect(_, item)
+        self:closeNoteBrowser()
+        self:openNote(self:liveAnchor(item.note), function()
+            self:showNoteBrowser(item.note)
+        end)
+        return true
+    end
+    function menu.onMenuHold(_, item)
+        self:showNoteBrowserActions(item.note)
+        return true
+    end
+    for i, note in ipairs(notes) do
+        if note == focus_note then
+            menu:switchItemTable(nil, nil, i)
+            break
+        end
+    end
+    table.insert(container, menu)
+    self.note_browser = container
+    UIManager:show(container)
 end
 
 -- Adds "Pen note" to the highlight menu (the "…" dialog of an existing
@@ -4909,6 +5124,7 @@ function Pencil:onCloseDocument()
     if self.note_canvas then
         self.note_canvas:onClose()
     end
+    self:closeNoteBrowser()
     self:freeHighlightNoteMarkSign()
 
     -- Cancel any pending refresh

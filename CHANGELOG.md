@@ -102,7 +102,20 @@ Fork of [mysticknits/pencil.koplugin](https://github.com/mysticknits/pencil.kopl
   An open note canvas paints the same triangle, and a mode switch from its
   menu or by side button hold + tap refreshes its corner the same way.
 
+## 2026-09-23 (feat/note-browser)
+
+- Note browser: "Browse pen notes" in the Pencil menu, "Browse all pen notes"
+  at the bottom of the pen note chooser, and a "Pencil: browse pen notes"
+  gesture action open a full-screen list of every pen note of the book. The
+  book note comes first, then the notes in reading order with the page number
+  on the right; highlight notes show the highlighted text, multi-page notes
+  their page count. Tapping a row opens the note, and closing the canvas
+  brings the list back at the same place; long-pressing offers "Go to
+  location", which pushes the current position so the back gesture returns,
+  and "Delete note".
+- `Notes.browseOrder` (pure, in `lib/notes.lua`) does the ordering and is
+  covered by `spec/notes_spec.lua`.
+
 ## Planned
 
-- Browsing all pen notes of a book (list, open, go to location).
 - Exporting pen notes as images or a PDF.

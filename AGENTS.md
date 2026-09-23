@@ -56,5 +56,4 @@ a KOReader stylus plugin, run on a Kobo Libra Colour (Kobo_monza) with the Kobo 
 
 ## Planned features
 
-- Browsing all canvas notes.
 - Exporting notes as images or PDF.

@@ -46,12 +46,14 @@ If you resize your book while reading it, your annotations will be WONKY. This i
    - **Pencil: select eraser** — switch to eraser
    - **Pencil: undo** — undo last stroke or eraser action
    - **Pencil: pen note…** — choose a page, chapter or book note and open its canvas
+   - **Pencil: browse pen notes** — list every pen note of the book
 
 ## Pen notes
 
 Pen notes are blank canvases stored next to the book in `pencil_notes.lua`, separate from the on-page strokes.
 
 - **Page, chapter or book note**: open the chooser from the Pencil menu (**Pen note…**), the **Pencil: pen note…** gesture action, or by holding the side button and double-tapping the page with the pen. It tells you whether a note already exists for the current page, the current chapter (the nearest table-of-contents entry) and the book
+- **Browsing**: **Browse pen notes** in the Pencil menu, **Browse all pen notes** in the chooser, or the **Pencil: browse pen notes** gesture action list every pen note of the book in reading order, book note first, with the page number on the right. Tap a note to open it and closing the canvas returns to the list; long-press a note to go to its place in the book or to delete it
 - **Highlight note**: long-press a highlight and tap **Pen note** next to **Note**; it is also in the **…** menu. On a fresh text selection, **Pen note** in the selection menu highlights the text first and then opens the canvas. The highlighted text is shown at the top of the note's first page, and a highlight that has a pen note shows a small pencil glyph in the margin, next to KOReader's own note mark. On ZenOS the selection menu shows plugin buttons only with *Show other items* enabled under *Highlight / Lookup*
 - On the canvas the pen draws with the current pen colour and width, holding the side button draws with the highlighter and the eraser end erases. The menu icon offers undo, clear page, delete page, the finger/pen mode switch and delete note; the X closes the canvas and saves it. A note that is closed empty is discarded
 - A note has as many pages as you need. The title bar shows the note name and **Page x of y** on one line. Turn the page as in the reader: swipe left (or press the forward page button) to go to the next page; on the last page this adds a blank one. Swipe right (or press the back page button) to go back. **Delete page** in the menu removes the current page (after confirmation if it has strokes); blank pages are also dropped when the note is closed
@@ -101,8 +103,7 @@ When enabled, the plugin automatically groups your pencil strokes into logical a
 
 1. Export of annotations
 2. Handling changing canvas size
-3. Browsing all pen notes of a book
-4. Exporting pen notes as images or a PDF
+3. Exporting pen notes as images or a PDF
 
 ## Acknowledgements
 

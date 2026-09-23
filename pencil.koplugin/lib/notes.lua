@@ -281,6 +281,42 @@ function Notes.fromSaved(data, convert)
     return store
 end
 
+local KIND_RANK = {
+    [Notes.KIND_BOOK] = 1,
+    [Notes.KIND_CHAPTER] = 2,
+    [Notes.KIND_PAGE] = 3,
+    [Notes.KIND_HIGHLIGHT] = 4,
+}
+
+--- The notes in reading order for a browser: the book note first, then by
+-- location page ascending, with chapter before page before highlight notes
+-- of the same page, oldest first among equals. locate(note) gives the page
+-- the note belongs to in the current layout, or nil when unknown; located
+-- notes come before unlocated ones. The store itself is left untouched.
+function Notes.browseOrder(store, locate)
+    assert(type(locate) == "function", "locate must be a function")
+    local keyed = {}
+    for i, note in ipairs(store.notes) do
+        local page = note.anchor.kind ~= Notes.KIND_BOOK and locate(note) or nil
+        assert(page == nil or type(page) == "number", "locate must return a page number or nil")
+        keyed[i] = { note = note, page = page, index = i }
+    end
+    table.sort(keyed, function(a, b)
+        local ra, rb = KIND_RANK[a.note.anchor.kind], KIND_RANK[b.note.anchor.kind]
+        if (ra == 1) ~= (rb == 1) then return ra == 1 end
+        if (a.page == nil) ~= (b.page == nil) then return a.page ~= nil end
+        if a.page ~= b.page then return a.page < b.page end
+        if ra ~= rb then return ra < rb end
+        if a.note.datetime ~= b.note.datetime then return a.note.datetime < b.note.datetime end
+        return a.index < b.index
+    end)
+    local ordered = {}
+    for i, entry in ipairs(keyed) do
+        ordered[i] = entry.note
+    end
+    return ordered
+end
+
 --- First max_chars characters of a UTF-8 string, with an ellipsis if cut.
 -- Newlines and runs of whitespace collapse to a single space.
 function Notes.snippet(text, max_chars)
