@@ -178,6 +178,17 @@ function Notes.remove(store, note)
     return false
 end
 
+--- Set of the annotation datetimes that have a highlight note: { [datetime] = true }.
+function Notes.highlightIds(store)
+    local ids = {}
+    for _, note in ipairs(store.notes) do
+        if note.anchor.kind == Notes.KIND_HIGHLIGHT then
+            ids[note.anchor.datetime] = true
+        end
+    end
+    return ids
+end
+
 function Notes.isEmpty(note)
     for _, page in ipairs(note.pages) do
         if not Notes.isPageEmpty(page) then return false end

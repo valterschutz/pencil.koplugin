@@ -9,6 +9,8 @@ package.path = package.path .. ";pencil.koplugin/?.lua"
 
 local SCREEN_W, SCREEN_H = 1264, 1680
 local TITLE_H = 60
+local HEADER_LINE_H = 30      -- stubbed TextBoxWidget: one line per newline-separated paragraph
+local HEADER_PAD, HEADER_LINE = 10, 1
 
 local function stubClass()
     local C = {}
@@ -55,7 +57,24 @@ preload("device", {
     hasKeys = function() return false end,
     input = { group = { Back = "Back" } },
 })
+preload("ui/font", { getFace = function(_, name, size) return { name = name, size = size } end })
 preload("ui/geometry", { new = function(_, o) return o end })
+preload("ui/size", {
+    padding = { large = HEADER_PAD, fullscreen = 15 },
+    line = { medium = HEADER_LINE },
+})
+preload("ui/widget/textboxwidget", {
+    new = function(_, o)
+        assert(o.text and o.face and o.width and o.height, "TextBoxWidget stub needs text, face, width, height")
+        local _, newlines = o.text:gsub("\n", "")
+        o.h = math.min(o.height, (newlines + 1) * HEADER_LINE_H)
+        o.painted = 0
+        o.getSize = function(self) return { w = self.width, h = self.h } end
+        o.paintTo = function(self) self.painted = self.painted + 1 end
+        o.free = function(self) self.freed = true end
+        return o
+    end,
+})
 preload("ui/gesturerange", { new = function(_, o) return o end })
 preload("ui/widget/container/inputcontainer", stubClass())
 preload("ui/widget/titlebar", {
@@ -113,12 +132,13 @@ local function newPencil()
     }
 end
 
-local function newCanvas(note)
+local function newCanvas(note, header)
     local closed = {}
     local canvas = NoteCanvas:new{
         pencil = newPencil(),
         note = note or Notes.newNote({ kind = "book" }, 1),
         title = "Book note",
+        header = header,
         tap_max_ms = TAP_MAX_MS,
         tap_max_px = TAP_MAX_PX,
         on_close = function(_, changed) table.insert(closed, changed) end,
@@ -501,6 +521,60 @@ describe("NoteCanvas", function()
             assert.is_true(canvas.pencil.finger_mode)
             canvas:showMenu()
             assert.equals("Switch to pen mode", ui.shown[2].buttons[4][1].text)
+        end)
+    end)
+
+    describe("header", function()
+        local HEADER_H = HEADER_LINE_H + 2 * HEADER_PAD + HEADER_LINE
+
+        it("is absent unless given, and must be a non-empty string", function()
+            local canvas = newCanvas()
+            assert.is_nil(canvas.header_widget)
+            assert.equals(TITLE_H, canvas:canvasTop())
+            assert.has_error(function() newCanvas(nil, "") end)
+            assert.has_error(function() newCanvas(nil, 42) end)
+        end)
+
+        it("pushes the drawing area down on the first page only", function()
+            local canvas = newCanvas(nil, "the highlighted text")
+            assert.equals(TITLE_H + HEADER_H, canvas:canvasTop())
+            swipe(canvas, "west")
+            assert.equals(TITLE_H, canvas:canvasTop())
+            swipe(canvas, "east")
+            assert.equals(TITLE_H + HEADER_H, canvas:canvasTop())
+        end)
+
+        it("grows with the text up to a third of the screen", function()
+            local canvas = newCanvas(nil, "one\ntwo\nthree")
+            assert.equals(TITLE_H + 3 * HEADER_LINE_H + 2 * HEADER_PAD + HEADER_LINE, canvas:canvasTop())
+            local long = string.rep("line\n", 200)
+            canvas = newCanvas(nil, long)
+            assert.equals(math.floor(SCREEN_H / 3), canvas.header_widget.height)
+            assert.equals(TITLE_H + math.floor(SCREEN_H / 3) + 2 * HEADER_PAD + HEADER_LINE, canvas:canvasTop())
+        end)
+
+        it("hands a contact that starts on the header to gesture detection", function()
+            local canvas = newCanvas(nil, "the highlighted text")
+            local top = canvas:canvasTop()
+            assert.is_false(canvas:handleStylusSlot({ id = 0, x = 100, y = top - 1, tool = PEN }))
+            assert.is_false(canvas.pen_down)
+            assert.is_false(canvas:handleStylusSlot({ id = -1, tool = PEN }))
+            assert.equals(0, #strokes(canvas))
+            down(canvas, 100, top)
+            assert.is_true(canvas.pen_down)
+            up(canvas)
+            assert.equals(1, #strokes(canvas))
+        end)
+
+        it("is painted on the first page and freed with the canvas", function()
+            local canvas = newCanvas(nil, "the highlighted text")
+            canvas:paintTo(screen.bb, 0, 0)
+            assert.equals(1, canvas.header_widget.painted)
+            swipe(canvas, "west")
+            canvas:paintTo(screen.bb, 0, 0)
+            assert.equals(1, canvas.header_widget.painted)
+            canvas:onCloseWidget()
+            assert.is_true(canvas.header_widget.freed)
         end)
     end)
 end)

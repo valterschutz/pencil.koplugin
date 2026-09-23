@@ -5,6 +5,7 @@ Enables freehand drawing and annotation with stylus on supported devices.
 @module koplugin.pencil
 --]]--
 
+local BD = require("ui/bidi")
 local Blitbuffer = require("ffi/blitbuffer")
 local CenterContainer = require("ui/widget/container/centercontainer")
 local DataStorage = require("datastorage")
@@ -22,6 +23,8 @@ local Notes = require("lib/notes")
 local NoteCanvas = require("lib/notecanvas")
 local ButtonDialog = require("ui/widget/buttondialog")
 local ConfirmBox = require("ui/widget/confirmbox")
+local Font = require("ui/font")
+local TextWidget = require("ui/widget/textwidget")
 local Screen = Device.screen
 local Size = require("ui/size")
 local InfoMessage = require("ui/widget/infomessage")
@@ -78,6 +81,10 @@ local IMAGE_BADGE_HIT_PAD = 32           -- extra pixels around badge for tap hi
 local IMAGE_BADGE_MARGIN_GAP = 5         -- gap from text/screen edge for margin badge
 local NOTE_MARKER_SIZE = 48              -- edge (px) of the corner triangle on pages with a pen note
 local NOTE_MARKER_GRAY = 0xBB            -- luminance of that triangle; light so it stays unobtrusive
+local HIGHLIGHT_NOTE_MARK_GLYPH = "\239\129\128"  -- U+F040 pencil, the glyph KOReader uses for its own note side mark
+local HIGHLIGHT_NOTE_MARK_FONT_SIZE = 14
+local HIGHLIGHT_NOTE_MARK_GAP = 3          -- px (unscaled) between KOReader's note mark and the pencil
+local HIGHLIGHT_NOTE_MARK_MARGIN_GAP = 5   -- px (unscaled) from the text to the mark, as in ReaderView:setupNoteMarkPosition
 
 -- Module-level reference to the most recently initialized Pencil instance.
 -- Used by the bookmark-list hook (a class-level monkey-patch installed once)
@@ -164,6 +171,8 @@ local Pencil = InputContainer:extend{
     notes_loaded = false, -- set true once the sidecar file was read (or found absent)
     note_canvas = nil,    -- open NoteCanvas widget, or nil
     note_marker = nil,    -- { page = <current page>, shown = bool }, see Pencil:renderNoteMarker
+    noted_highlights = nil,  -- Notes.highlightIds of the store, see Pencil:notedHighlights
+    highlight_note_mark_sign = nil,  -- TextWidget drawing HIGHLIGHT_NOTE_MARK_GLYPH
 }
 
 function Pencil:init()
@@ -4210,6 +4219,7 @@ function Pencil:paintTo(bb, x, y)
     end
 
     self:renderNoteMarker(bb, page)
+    self:renderHighlightNoteMarks(bb)
 
     -- Render current stroke being drawn (only if on current page)
     if self.current_stroke and self.current_stroke.page == page then
@@ -4523,8 +4533,17 @@ function Pencil:noteTitle(note)
     elseif anchor.kind == Notes.KIND_PAGE then
         return T(_("Page %1"), tostring(self:resolveAnchorPage(anchor)))
     else
-        return T(_("Highlight: %1"), Notes.snippet(anchor.text, NOTE_TITLE_MAX_CHARS))
+        return _("Highlight note")
     end
+end
+
+-- The highlighted text, shown on the first page of a highlight note.
+-- Taken from the anchor being opened rather than the stored one so that
+-- the canvas shows the annotation's current text.
+function Pencil:noteHeader(anchor)
+    if anchor.kind ~= Notes.KIND_HIGHLIGHT then return nil end
+    if type(anchor.text) ~= "string" or anchor.text == "" then return nil end
+    return anchor.text
 end
 
 function Pencil:findNote(anchor)
@@ -4543,8 +4562,115 @@ function Pencil:currentPageHasNote(page)
     return self.note_marker.shown
 end
 
+-- Drops what is derived from the notes store for painting; called whenever
+-- the store or the page changes.
 function Pencil:invalidateNoteMarker()
     self.note_marker = nil
+    self.noted_highlights = nil
+end
+
+function Pencil:notedHighlights()
+    if not self.notes_loaded then return {} end
+    if not self.noted_highlights then
+        self.noted_highlights = Notes.highlightIds(self.notes)
+    end
+    return self.noted_highlights
+end
+
+function Pencil:highlightNoteMarkSign()
+    if not self.highlight_note_mark_sign then
+        self.highlight_note_mark_sign = TextWidget:new{
+            text = HIGHLIGHT_NOTE_MARK_GLYPH,
+            face = Font:getFace("smallinfofont", HIGHLIGHT_NOTE_MARK_FONT_SIZE),
+            padding = 0,
+        }
+    end
+    return self.highlight_note_mark_sign
+end
+
+function Pencil:freeHighlightNoteMarkSign()
+    if self.highlight_note_mark_sign then
+        self.highlight_note_mark_sign:free()
+        self.highlight_note_mark_sign = nil
+    end
+end
+
+-- Where KOReader puts its note side mark for a highlight whose first box
+-- is `rect`: the x of the mark and its width. nil when the note marker
+-- setting is "underline" or off, in which case ReaderView computes no
+-- position. Mirrors the choice in ReaderView:drawHighlightRect.
+function Pencil:koreaderNoteMarkX(view, rect)
+    if not view.note_mark_pos_x1 then return nil end
+    local x
+    if self.ui.paging or view.document:getVisiblePageCount() == 1 or rect.x < Screen:getWidth() / 2 then
+        x = view.note_mark_pos_x1
+    else
+        x = view.note_mark_pos_x2
+    end
+    local width = view.note_mark_sign and view.note_mark_sign:getWidth() or view.note_mark_line_w
+    return x, width
+end
+
+-- x of the pencil for the highlight whose first box is `rect`: right next
+-- to KOReader's own note mark so a highlight with both kinds of note reads
+-- "| <pencil>", and where that mark would be when KOReader draws none.
+function Pencil:highlightNoteMarkX(view, rect, sign_w)
+    local mirrored = BD.mirroredUILayout()
+    local gap = Screen:scaleBySize(HIGHLIGHT_NOTE_MARK_GAP)
+    local mark_x, mark_w = self:koreaderNoteMarkX(view, rect)
+    if mark_x then
+        return mirrored and (mark_x - gap - sign_w) or (mark_x + mark_w + gap)
+    end
+    local screen_w = Screen:getWidth()
+    local margin_gap = Screen:scaleBySize(HIGHLIGHT_NOTE_MARK_MARGIN_GAP)
+    if self.ui.paging then
+        return mirrored and margin_gap or (screen_w - margin_gap - sign_w)
+    end
+    local margins = view.document:getPageMargins()
+    if mirrored then
+        return margins["left"] - margin_gap - sign_w
+    end
+    local x = screen_w - margins["right"] + margin_gap
+    if view.document:getVisiblePageCount() == 2 and rect.x < screen_w / 2 then
+        x = x - view.document:getPageOffsetX(view.document:getCurrentPage(true) + 1)
+    end
+    return x
+end
+
+-- A small pencil glyph in the margin beside the first line of every
+-- visible highlight that has a pen note. ReaderView records the boxes it
+-- painted this frame in view.highlight.visible_boxes (screen coordinates
+-- in rolling documents, page coordinates in paging ones); ReaderView
+-- paints before this plugin, so the list is current.
+function Pencil:renderHighlightNoteMarks(bb)
+    local view = self.ui.view
+    local boxes = view and view.highlight and view.highlight.visible_boxes
+    if not (boxes and #boxes > 0) then return end
+    local noted = self:notedHighlights()
+    if next(noted) == nil then return end
+    local annotations = self.ui.annotation and self.ui.annotation.annotations
+    if not annotations then return end
+
+    local first_rect = {}  -- annotation index -> screen rect of its first visible box
+    for _, hl_box in ipairs(boxes) do
+        local item = annotations[hl_box.index]
+        if item and noted[item.datetime] and not first_rect[hl_box.index] then
+            local rect = hl_box.rect
+            if self.ui.paging then
+                rect = view:pageToScreenTransform(item.page, rect)
+            end
+            if rect then
+                first_rect[hl_box.index] = rect
+            end
+        end
+    end
+    if next(first_rect) == nil then return end
+
+    local sign = self:highlightNoteMarkSign()
+    local sign_w = sign:getWidth()
+    for _, rect in pairs(first_rect) do
+        sign:paintTo(bb, self:highlightNoteMarkX(view, rect, sign_w), rect.y)
+    end
 end
 
 -- A small light-gray triangle in the top-right corner marks pages that have
@@ -4576,6 +4702,7 @@ function Pencil:openNote(anchor)
         pencil = self,
         note = note,
         title = self:noteTitle(note),
+        header = self:noteHeader(anchor),
         tap_max_ms = SIDE_BUTTON_TAP_MAX_MS,
         tap_max_px = SIDE_BUTTON_TAP_MAX_PX,
         on_delete = function(canvas)
@@ -4663,9 +4790,18 @@ end
 -- Adds "Pen note" to the highlight menu (the "…" dialog of an existing
 -- highlight, and the menu of a fresh text selection, which is highlighted
 -- first).
+-- "Pen note" appears in two places: next to "Note" in the dialog that a
+-- long-press on a highlight opens, and in the "…" menu, which is also the
+-- menu of a fresh text selection. The first is injected while KOReader
+-- builds that dialog (see installEditHighlightDialogButton), because
+-- ReaderHighlight offers no hook for it; the second uses the official
+-- addToHighlightDialog hook. Note that ZenOS replaces the "…" menu with
+-- its own icon row and shows plugin buttons there only when its
+-- "Show other items" setting is on.
 function Pencil:installHighlightDialogButton()
     local highlight = self.ui.highlight
     if not (highlight and highlight.addToHighlightDialog) then return end
+    self:installEditHighlightDialogButton(highlight)
     highlight:addToHighlightDialog("13_pencil_note", function(this, index)
         return {
             text = _("Pen note"),
@@ -4688,6 +4824,53 @@ function Pencil:installHighlightDialogButton()
     end)
 end
 
+-- Wraps ReaderHighlight:showHighlightDialog on this instance so that the
+-- dialog it builds gets a "Pen note" button after "Note". The dialog is a
+-- local of that method, so ButtonDialog.new is intercepted for the
+-- duration of the call and the button is added to the first row of the
+-- dialog named "edit_highlight_dialog". Any other ButtonDialog passes
+-- through untouched, and the constructor is restored even on error.
+function Pencil:installEditHighlightDialogButton(highlight)
+    if type(highlight.showHighlightDialog) ~= "function" then return end
+    local original_show = highlight.showHighlightDialog
+    local original_new = ButtonDialog.new
+    highlight.showHighlightDialog = function(this, index, ...)
+        assert(ButtonDialog.new == original_new, "ButtonDialog.new already replaced")
+        ButtonDialog.new = function(cls, o)
+            if type(o) == "table" and o.name == "edit_highlight_dialog" then
+                self:addPenNoteButton(o, this, index)
+            end
+            return original_new(cls, o)
+        end
+        local ok, err = pcall(original_show, this, index, ...)
+        ButtonDialog.new = original_new
+        if not ok then error(err, 0) end
+    end
+end
+
+-- Adds the button to the dialog spec `o` (which becomes the dialog object
+-- itself), right after "Note" in its first row, or at the row's end when
+-- "Note" is not there.
+function Pencil:addPenNoteButton(o, highlight, index)
+    local row = o.buttons and o.buttons[1]
+    if type(row) ~= "table" then return end
+    local position = #row + 1
+    for i, button in ipairs(row) do
+        if button.text == _("Note") then
+            position = i + 1
+            break
+        end
+    end
+    table.insert(row, position, {
+        text = _("Pen note"),
+        callback = function()
+            UIManager:close(o)
+            highlight:onClose()
+            self:openHighlightNote(index)
+        end,
+    })
+end
+
 -- Handle document close
 function Pencil:onCloseDocument()
     logger.info("Pencil: onCloseDocument called, strokes count =", #self.strokes)
@@ -4696,6 +4879,7 @@ function Pencil:onCloseDocument()
     if self.note_canvas then
         self.note_canvas:onClose()
     end
+    self:freeHighlightNoteMarkSign()
 
     -- Cancel any pending refresh
     self:cancelPendingRefresh()

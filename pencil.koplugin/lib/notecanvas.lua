@@ -14,6 +14,9 @@ the same. The title bar shows the page count, the X closes the canvas and
 the menu icon offers undo, clear page, delete page, the mode toggle and
 delete note.
 
+An optional header (the text of a highlight) is shown under the title bar
+on the first page only; the pen draws below it.
+
 @module pencil.lib.notecanvas
 --]]--
 
@@ -21,10 +24,13 @@ local Blitbuffer = require("ffi/blitbuffer")
 local ButtonDialog = require("ui/widget/buttondialog")
 local ConfirmBox = require("ui/widget/confirmbox")
 local Device = require("device")
+local Font = require("ui/font")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
 local InputContainer = require("ui/widget/container/inputcontainer")
 local Notes = require("lib/notes")
+local Size = require("ui/size")
+local TextBoxWidget = require("ui/widget/textboxwidget")
 local TitleBar = require("ui/widget/titlebar")
 local UIManager = require("ui/uimanager")
 local logger = require("logger")
@@ -43,11 +49,14 @@ local TOOL_HIGHLIGHTER = "highlighter"
 
 local REFRESH_INTERVAL_MS = 16
 local ERASE_THRESHOLD_PX = 20
+local HEADER_FONT_SIZE = 20
+local HEADER_MAX_SCREEN_FRACTION = 1 / 3  -- a longer header is cut with an ellipsis
 
 local NoteCanvas = InputContainer:extend{
     pencil = nil,        -- Pencil plugin: tool settings, input mode, stroke rendering, coordinate transform
     note = nil,          -- Notes record; its pages are edited in place
     title = "",
+    header = nil,        -- text shown under the title bar on the first page, or nil
     tap_max_ms = nil,    -- side-button contact shorter than this and ...
     tap_max_px = nil,    -- ... moving less than this is a tap, not a highlight
     on_close = nil,      -- function(canvas, changed)
@@ -76,7 +85,8 @@ function NoteCanvas:init()
         show_parent = self,
     }
     self[1] = self.title_bar
-    self.canvas_top = self.title_bar:getHeight()
+    self.title_bar_height = self.title_bar:getHeight()
+    self.header_widget = self.header and self:newHeaderWidget() or nil
 
     self.undo_stacks = {}  -- page table -> list of undo entries
     self.changed = false
@@ -97,6 +107,31 @@ function NoteCanvas:init()
             PrevPage = { { Device.input.group.PgBack } },
         }
     end
+end
+
+-- Wrapped header text, at most HEADER_MAX_SCREEN_FRACTION of the screen high.
+function NoteCanvas:newHeaderWidget()
+    assert(type(self.header) == "string" and self.header ~= "", "header must be a non-empty string")
+    return TextBoxWidget:new{
+        text = self.header,
+        face = Font:getFace("cfont", HEADER_FONT_SIZE),
+        width = self.dimen.w - 2 * Size.padding.fullscreen,
+        height = math.floor(self.dimen.h * HEADER_MAX_SCREEN_FRACTION),
+        height_adjust = true,
+        height_overflow_show_ellipsis = true,
+    }
+end
+
+-- Height of the header block on the current page: text, padding and the
+-- separating line on the first page, nothing on the others.
+function NoteCanvas:headerHeight()
+    if not (self.header_widget and self.page_index == 1) then return 0 end
+    return self.header_widget:getSize().h + 2 * Size.padding.large + Size.line.medium
+end
+
+-- First y the pen may draw on: below the title bar and the header.
+function NoteCanvas:canvasTop()
+    return self.title_bar_height + self:headerHeight()
 end
 
 function NoteCanvas:currentPage()
@@ -125,6 +160,9 @@ end
 function NoteCanvas:paintTo(bb, x, y)
     bb:paintRect(x, y, self.dimen.w, self.dimen.h, Blitbuffer.COLOR_WHITE)
     self.title_bar:paintTo(bb, x, y)
+    if self:headerHeight() > 0 then
+        self:paintHeader(bb, x, y + self.title_bar_height)
+    end
     for _, stroke in ipairs(self:strokes()) do
         self.pencil:renderStroke(bb, stroke)
     end
@@ -133,11 +171,18 @@ function NoteCanvas:paintTo(bb, x, y)
     end
 end
 
+function NoteCanvas:paintHeader(bb, x, y)
+    self.header_widget:paintTo(bb, x + Size.padding.fullscreen, y + Size.padding.large)
+    local line_y = y + self:headerHeight() - Size.line.medium
+    bb:paintRect(x, line_y, self.dimen.w, Size.line.medium, Blitbuffer.COLOR_DARK_GRAY)
+end
+
 -- Stylus entry point. slot = {id, x, y, tool}; id < 0 means the tip lifted.
 -- Returns true to keep the pen out of gesture detection. A contact that
--- starts on the title bar is handed to gesture detection instead, lift
--- included, so the pen can tap the X and the menu icon. In finger mode
--- the bare tip is handed over as well, so it swipes and taps like a finger.
+-- starts on the title bar or the header is handed to gesture detection
+-- instead, lift included, so the pen can tap the X and the menu icon. In
+-- finger mode the bare tip is handed over as well, so it swipes and taps
+-- like a finger.
 function NoteCanvas:handleStylusSlot(slot)
     if not (slot.id and slot.id >= 0) then
         if self.title_bar_contact then
@@ -157,7 +202,7 @@ function NoteCanvas:handleStylusSlot(slot)
     local is_highlighter = slot.tool == highlighter_type
     local x, y = self.pencil:transformCoordinates(slot.x or 0, slot.y or 0)
     if not self.pen_down then
-        if y < self.canvas_top or (self.pencil:isFingerMode() and not (is_eraser or is_highlighter)) then
+        if y < self:canvasTop() or (self.pencil:isFingerMode() and not (is_eraser or is_highlighter)) then
             self.title_bar_contact = true
             return false
         end
@@ -174,7 +219,7 @@ function NoteCanvas:handleStylusSlot(slot)
 end
 
 function NoteCanvas:isInDrawingArea(x, y)
-    return y >= self.canvas_top and y < self.dimen.h and x >= 0 and x < self.dimen.w
+    return y >= self:canvasTop() and y < self.dimen.h and x >= 0 and x < self.dimen.w
 end
 
 function NoteCanvas:penDown(x, y, highlighter)
@@ -469,6 +514,9 @@ end
 
 function NoteCanvas:onCloseWidget()
     self.title_bar:free()
+    if self.header_widget then
+        self.header_widget:free()
+    end
 end
 
 return NoteCanvas

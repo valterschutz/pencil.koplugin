@@ -72,6 +72,27 @@ Fork of [mysticknits/pencil.koplugin](https://github.com/mysticknits/pencil.kopl
   extra refresh; the lookup is cached per page and dropped on navigation and
   whenever a note canvas closes.
 
+## 2026-09-23 (feat/highlight-header)
+
+- A highlight note shows the highlighted text under the title bar on its
+  first page, wrapped and cut with an ellipsis past a third of the screen.
+  The pen draws below it; a contact that starts on the header goes to
+  gesture detection like one on the title bar. The title bar of a
+  highlight note now reads "Highlight note" instead of repeating a snippet
+  of the text.
+- "Pen note" is also a button next to "Note" in the dialog that a long-press
+  on a highlight opens. It is injected while ReaderHighlight builds that
+  dialog (ButtonDialog.new is intercepted for the duration of the call),
+  because the ZenOS build on the Kobo replaces the "…" menu with its own
+  icon row and hides other plugins' buttons unless its "Show other items"
+  setting is on.
+- A highlight that has a pen note gets a small pencil glyph (the one
+  KOReader uses for its own note side mark) in the margin beside its first
+  line, right next to KOReader's side line or side mark when the highlight
+  also has a text note, and where that mark would be otherwise. Boxes come
+  from the list ReaderView recorded for the frame; the set of noted
+  highlights is cached with the page marker and dropped with it.
+
 ## Planned
 
 - Browsing all pen notes of a book (list, open, go to location).

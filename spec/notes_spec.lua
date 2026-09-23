@@ -258,6 +258,18 @@ describe("Notes", function()
         end)
     end)
 
+    describe("highlightIds", function()
+        it("collects the datetimes of highlight notes only", function()
+            local store = Notes.newStore()
+            assert.same({}, Notes.highlightIds(store))
+            Notes.add(store, Notes.newNote({ kind = "page", page = 3 }, 1))
+            Notes.add(store, Notes.newNote({ kind = "highlight", datetime = "2026-09-23 10:00:00" }, 2))
+            Notes.add(store, Notes.newNote({ kind = "highlight", datetime = "2026-09-23 11:00:00" }, 3))
+            assert.same({ ["2026-09-23 10:00:00"] = true, ["2026-09-23 11:00:00"] = true },
+                Notes.highlightIds(store))
+        end)
+    end)
+
     describe("snippet", function()
         it("returns short text unchanged and cuts long text with an ellipsis", function()
             assert.equals("short", Notes.snippet("short", 10))
