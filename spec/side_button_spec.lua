@@ -73,15 +73,21 @@ local function createMockPencil(options)
         return true
     end
 
+    mock._overlay = false
+    function mock:isOverlayActive() return self._overlay end
+
     function mock:onStylusButtonRelease()
         local was_down = self.side_button_down
-        self.side_button_down = false
+        local used_for_highlight = self.side_button_used_for_highlight
         local held_ms = self.side_button_press_time and (self.now_ms - self.side_button_press_time) or 0
+        self.side_button_down = false
+        self.side_button_used_for_highlight = false
         self.side_button_press_time = nil
-        if was_down and not self.side_button_used_for_highlight and held_ms <= SIDE_BUTTON_TAP_MAX_MS then
+        if not was_down then return false end
+        if self:isOverlayActive() then return false end
+        if not used_for_highlight and held_ms <= SIDE_BUTTON_TAP_MAX_MS then
             self:onSideButtonTap()
         end
-        self.side_button_used_for_highlight = false
         return true
     end
 
@@ -152,6 +158,16 @@ describe("side button", function()
         it("press used for highlighting does not toggle", function()
             local p = createMockPencil()
             p:press(100, true)
+            assert.equals("pen", p.current_tool)
+        end)
+
+        it("release under an overlay still clears the held state", function()
+            local p = createMockPencil()
+            p:onStylusButtonPress()
+            p._overlay = true
+            assert.is_false(p:onStylusButtonRelease())
+            assert.is_false(p.side_button_down)
+            assert.is_false(p.side_button_used_for_highlight)
             assert.equals("pen", p.current_tool)
         end)
 

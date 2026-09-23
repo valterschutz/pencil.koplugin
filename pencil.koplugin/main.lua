@@ -1581,21 +1581,26 @@ end
 
 -- Handle stylus button release (up event)
 function Pencil:onStylusButtonRelease()
-    if not self:isEnabled() or self:isOverlayActive() then return false end
-
+    -- Always clear the held state, even if an overlay (such as the mode
+    -- message shown by a hold + tap) is up when the release arrives.
+    -- Otherwise the button would stay "held" and the next plain stroke
+    -- would become a highlight.
     local was_down = self.side_button_down
-    self.side_button_down = false
+    local used_for_highlight = self.side_button_used_for_highlight
     local held_ms = self.side_button_press_time and time.to_ms(time.now() - self.side_button_press_time) or 0
+    self.side_button_down = false
+    self.side_button_used_for_highlight = false
     self.side_button_press_time = nil
 
-    if was_down and not self.side_button_used_for_highlight and held_ms <= SIDE_BUTTON_TAP_MAX_MS then
+    if not was_down then return false end
+    if not self:isEnabled() or self:isOverlayActive() then return false end
+
+    if not used_for_highlight and held_ms <= SIDE_BUTTON_TAP_MAX_MS then
         logger.dbg("Pencil: side button tap after", held_ms, "ms")
         self:onSideButtonTap()
     else
-        logger.dbg("Pencil: side button held", held_ms, "ms, highlight =", self.side_button_used_for_highlight)
+        logger.dbg("Pencil: side button held", held_ms, "ms, highlight =", used_for_highlight)
     end
-
-    self.side_button_used_for_highlight = false
     return true
 end
 
@@ -1729,9 +1734,8 @@ function Pencil:onKeyRelease(key)
         return true
     end
 
-    if not self:isEnabled() or self:isOverlayActive() then return false end
-
-    -- Side button released
+    -- Side button released. Runs before the overlay check so the held state
+    -- is cleared even when a message is showing; see onStylusButtonRelease.
     if key_str:match("Highlighter") or key_str:match("Stylus") then
         logger.dbg("Pencil: Stylus button release detected:", key_str)
         return self:onStylusButtonRelease()
