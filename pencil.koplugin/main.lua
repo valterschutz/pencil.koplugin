@@ -76,8 +76,8 @@ local IMAGE_CAPTURE_DEBOUNCE_S = 4       -- seconds after last stroke before cap
 local IMAGE_BADGE_SIZE = 48              -- on-page badge edge (px) when annotation is stale
 local IMAGE_BADGE_HIT_PAD = 32           -- extra pixels around badge for tap hit-test
 local IMAGE_BADGE_MARGIN_GAP = 5         -- gap from text/screen edge for margin badge
-local NOTE_MARKER_SIZE = 24              -- edge (px) of the corner triangle on pages with a pen note
-local NOTE_MARKER_GRAY = 0xCC            -- luminance of that triangle; light so it stays unobtrusive
+local NOTE_MARKER_SIZE = 48              -- edge (px) of the corner triangle on pages with a pen note
+local NOTE_MARKER_GRAY = 0xBB            -- luminance of that triangle; light so it stays unobtrusive
 
 -- Module-level reference to the most recently initialized Pencil instance.
 -- Used by the bookmark-list hook (a class-level monkey-patch installed once)
