@@ -36,8 +36,23 @@ a KOReader stylus plugin, run on a Kobo Libra Colour (Kobo_monza) with the Kobo 
 
 ## Compatibility
 
+- The device runs a ZenOS build of KOReader (v2026.03 at the time of writing,
+  see `.adds/koreader/git-rev`), with `zenos.koplugin` installed.
+- ZenOS's "Zen highlight menu" (`zenos.koplugin/modules/reader/patches/highlight_menu.lua`)
+  replaces `ReaderHighlight:onShowHighlightMenu`, the "…" menu of a highlight
+  and the menu of a fresh text selection, with an icon row. Buttons that
+  plugins register via `addToHighlightDialog` only appear there when the ZenOS
+  setting "Show other items" (Highlight / Lookup) is on, and it is off by
+  default. That is why "Pen note" is also injected into the long-press
+  edit-highlight dialog, which ZenOS leaves alone (see
+  `Pencil:installEditHighlightDialogButton`). When something is missing from a
+  highlight menu, check that patch before debugging the plugin.
 - The device also runs `coloronhighlight.koplugin`, which wraps Pencil's
-  `finishTextHighlight`. Keep that function name and signature stable.
+  `finishTextHighlight` and `ReaderHighlight.onShowHighlightMenu`. Keep that
+  function name and signature stable.
+- Debugging on the device: `.adds/koreader/crash.log` has the plugin's
+  `logger.info` lines and the traceback of a crash. Read it over USB before
+  guessing.
 
 ## Planned features
 
