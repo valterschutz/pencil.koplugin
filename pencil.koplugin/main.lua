@@ -804,6 +804,8 @@ function Pencil:startTextHighlight(raw_x, raw_y)
     -- Prevent the drawing-path pen-down branch from also firing on subsequent
     -- events for this contact.
     self.pen_down = true
+    self.side_button_down = true
+    self.side_button_used_for_highlight = true
 
     -- Show the first-word preview immediately.
     self:_paintTempSelection()
@@ -829,6 +831,7 @@ function Pencil:extendTextHighlight(raw_x, raw_y)
                                self.ui.document, rh.hold_pos, rh.holdpan_pos)
     if ok and selected and selected.pos0 and selected.pos1 then
         rh.selected_text = selected
+        self.side_button_used_for_highlight = true
         -- Repaint preview with the new sboxes.
         self:_paintTempSelection()
     end
@@ -846,6 +849,7 @@ function Pencil:finishTextHighlight()
     self:_clearTempSelection()
 
     if has_selection then
+        self.side_button_used_for_highlight = true
         -- saveHighlight(false) builds the annotation item from self.selected_text
         -- and calls self.ui.annotation:addItem(item) internally, handling the
         -- PDF/EPUB item-shape difference. It emits AnnotationsModified itself,
@@ -1381,7 +1385,9 @@ function Pencil:onStylusButtonPress()
     if not self:isEnabled() or self:isOverlayActive() then return false end
 
     self.side_button_down = true
-    self.side_button_used_for_highlight = false
+    if not self.highlighting then
+        self.side_button_used_for_highlight = false
+    end
 
     logger.dbg("Pencil: side button pressed")
     return true
@@ -1429,17 +1435,26 @@ function Pencil:togglePenEraser()
     })
 end
 
+local function getKeyEventInfo(key)
+    local key_name = type(key) == "table" and key.key or nil
+    local ok, key_str = pcall(tostring, key)
+    if not ok then
+        key_str = key_name or ""
+    end
+    return key_name, key_str or ""
+end
+
 -- Handle stylus button and tool events
 function Pencil:onKeyPress(key)
-    local key_str = tostring(key)
+    local key_name, key_str = getKeyEventInfo(key)
 
     -- Always log key events when debug mode is on (even if not enabled)
     if self.input_debug_mode then
-        self:writeDebugLog(string.format("KEY PRESS: %s key.key=%s", key_str, tostring(key.key)))
+        self:writeDebugLog(string.format("KEY PRESS: %s key.key=%s", key_str, tostring(key_name)))
     end
 
     -- Hardware Eraser button - works regardless of pencil enabled state
-    if (not self.swap_eraser_and_highlighter and key.key == "Eraser") then
+    if (not self.swap_eraser_and_highlighter and key_name == "Eraser") then
         logger.info("Pencil: Eraser button PRESSED")
         self.eraser_button_active = true
         self.eraser_button_deleted = {}
@@ -1473,7 +1488,7 @@ function Pencil:onKeyPress(key)
 
     -- BTN_STYLUS (331) - side button on stylus (mapped to "Eraser" on Kobo)
     -- BTN_STYLUS2 (332) - second side button (mapped to "Highlighter" on Kobo)
-    if (self.swap_eraser_and_highlighter and key.key == "Eraser") or (not self.swap_eraser_and_highlighter and (key_str:match("Highlighter") or key_str:match("Stylus"))) then
+    if (self.swap_eraser_and_highlighter and key_name == "Eraser") or (not self.swap_eraser_and_highlighter and (key_str:match("Highlighter") or key_str:match("Stylus"))) then
         logger.dbg("Pencil: Stylus button press detected:", key_str)
         return self:onStylusButtonPress()
     end
@@ -1481,15 +1496,15 @@ function Pencil:onKeyPress(key)
 end
 
 function Pencil:onKeyRelease(key)
-    local key_str = tostring(key)
+    local key_name, key_str = getKeyEventInfo(key)
 
     -- Always log key events when debug mode is on (even if not enabled)
     if self.input_debug_mode then
-        self:writeDebugLog(string.format("KEY RELEASE: %s key.key=%s", key_str, tostring(key.key)))
+        self:writeDebugLog(string.format("KEY RELEASE: %s key.key=%s", key_str, tostring(key_name)))
     end
 
     -- Hardware Eraser button released
-    if key.key == "Eraser" and self.eraser_button_active then
+    if key_name == "Eraser" and self.eraser_button_active then
         logger.info("Pencil: Eraser button RELEASED")
         self.eraser_button_active = false
         if self.eraser_button_deleted and #self.eraser_button_deleted > 0 then
