@@ -68,8 +68,7 @@ function NoteCanvas:init()
         width = self.dimen.w,
         fullscreen = true,
         align = "left",
-        title = self.title,
-        subtitle = self:pageLabel(),
+        title = self:titleText(),
         with_bottom_line = true,
         left_icon = "appbar.menu",
         left_icon_tap_callback = function() self:showMenu() end,
@@ -118,8 +117,9 @@ function NoteCanvas:undoStack()
     return stack
 end
 
-function NoteCanvas:pageLabel()
-    return T(_("Page %1 of %2"), self.page_index, #self.note.pages)
+-- Single line so the bar stays as short as possible: "Book note · Page 2 of 3"
+function NoteCanvas:titleText()
+    return T(_("%1 · Page %2 of %3"), self.title, self.page_index, #self.note.pages)
 end
 
 function NoteCanvas:paintTo(bb, x, y)
@@ -342,7 +342,7 @@ function NoteCanvas:goToPage(index)
     assert(index >= 1 and index <= #self.note.pages, "page index out of range: " .. tostring(index))
     self:penUp()
     self.page_index = index
-    self.title_bar:setSubTitle(self:pageLabel(), true)
+    self.title_bar:setTitle(self:titleText(), true)
     self:repaint()
 end
 

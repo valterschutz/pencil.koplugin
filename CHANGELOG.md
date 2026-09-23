@@ -54,7 +54,7 @@ Fork of [mysticknits/pencil.koplugin](https://github.com/mysticknits/pencil.kopl
   strokes (store version 2; version 1 notes load as one page). On the canvas
   a swipe west (or the forward page button) turns to the next page and adds
   a blank one past the last, a swipe east (or the back page button) goes
-  back, as in the reader. The title bar subtitle shows "Page x of y". Undo
+  back, as in the reader. The title bar shows "Page x of y" next to the note name. Undo
   and clear act on the current page; "Delete page" in the menu removes the
   current page, asking first if it has strokes. Blank pages are dropped when
   the canvas closes and are never written to disk.

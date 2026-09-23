@@ -63,7 +63,7 @@ preload("ui/widget/titlebar", {
         o.getHeight = function() return TITLE_H end
         o.paintTo = function() end
         o.free = function() end
-        o.setSubTitle = function(self, text) self.subtitle = text end
+        o.setTitle = function(self, text) self.title = text end
         return o
     end,
 })
@@ -310,10 +310,10 @@ describe("NoteCanvas", function()
     end)
 
     describe("pages", function()
-        it("starts on page 1 with the count in the subtitle", function()
+        it("starts on page 1 with the count in the title", function()
             local canvas = newCanvas()
             assert.equals(1, canvas.page_index)
-            assert.equals("Page 1 of 1", canvas.title_bar.subtitle)
+            assert.equals("Book note · Page 1 of 1", canvas.title_bar.title)
         end)
 
         it("adds a page on a swipe west past the last page and navigates back and forth", function()
@@ -323,12 +323,12 @@ describe("NoteCanvas", function()
             assert.equals(2, canvas.page_index)
             assert.equals(2, #canvas.note.pages)
             assert.equals(0, #strokes(canvas))
-            assert.equals("Page 2 of 2", canvas.title_bar.subtitle)
+            assert.equals("Book note · Page 2 of 2", canvas.title_bar.title)
             down(canvas, 200, 600) up(canvas)
             assert.is_true(swipe(canvas, "east"))
             assert.equals(1, canvas.page_index)
             assert.equals(100, strokes(canvas)[1].points[1].x)
-            assert.equals("Page 1 of 2", canvas.title_bar.subtitle)
+            assert.equals("Book note · Page 1 of 2", canvas.title_bar.title)
             assert.is_true(swipe(canvas, "west"))
             assert.equals(2, canvas.page_index)
             assert.equals(2, #canvas.note.pages)
@@ -412,7 +412,7 @@ describe("NoteCanvas", function()
             assert.equals(2, #canvas.note.pages)
             assert.equals(2, canvas.page_index)
             assert.equals(300, strokes(canvas)[1].points[1].x)
-            assert.equals("Page 2 of 2", canvas.title_bar.subtitle)
+            assert.equals("Book note · Page 2 of 2", canvas.title_bar.title)
             assert.is_true(canvas.changed)
             canvas:deletePage()
             assert.equals(1, canvas.page_index)
