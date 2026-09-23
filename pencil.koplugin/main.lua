@@ -57,7 +57,7 @@ local SIDE_BUTTON_TAP_TOOL = "tool"  -- toggle pencil/eraser
 local SIDE_BUTTON_TAP_MODE = "mode"  -- toggle finger/pen mode
 local SIDE_BUTTON_TAP_MAX_MS = 500   -- longer than this is a hold, not a tap
 local SIDE_BUTTON_TAP_MAX_PX = 10    -- tip movement beyond this is a drag, not a tap
-local SIDE_BUTTON_DOUBLE_TAP_MS = 400 -- second tap within this of the first opens the pen note menu
+local SIDE_BUTTON_DOUBLE_TAP_MS = 250 -- second tap within this of the first opens the pen note menu
 
 -- Color picker trigger settings
 local COLOR_PICKER_DELAY_MS = 500  -- How long pen must be held still (milliseconds)

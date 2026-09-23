@@ -10,7 +10,7 @@ local SIDE_BUTTON_TAP_TOOL = "tool"
 local SIDE_BUTTON_TAP_MODE = "mode"
 local SIDE_BUTTON_TAP_MAX_MS = 500
 local SIDE_BUTTON_TAP_MAX_PX = 10
-local SIDE_BUTTON_DOUBLE_TAP_MS = 400
+local SIDE_BUTTON_DOUBLE_TAP_MS = 250
 
 -- Mock Pencil mirroring onStylusButtonPress/Release, onSideButtonTap and
 -- the input mode helpers, with a controllable clock.

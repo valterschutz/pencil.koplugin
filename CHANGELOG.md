@@ -39,7 +39,7 @@ Fork of [mysticknits/pencil.koplugin](https://github.com/mysticknits/pencil.kopl
   note exists; "Pen note" in the highlight menu opens the note of a highlight
   (highlighting a fresh selection first). Holding the side button and
   double-tapping the page also opens the chooser; a single hold + tap now
-  waits 400 ms for a second tap before it toggles.
+  waits 250 ms for a second tap before it toggles.
 - Storage in the sidecar as `pencil_notes.lua` (`lib/notes.lua`, pure and
   tested). Anchors: page by page number, re-derived from an xpointer in
   rolling documents; chapter by the TOC entry's xpointer or page; highlight
