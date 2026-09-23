@@ -18,6 +18,10 @@ local HorizontalSpan = require("ui/widget/horizontalspan")
 local VerticalGroup = require("ui/widget/verticalgroup")
 local VerticalSpan = require("ui/widget/verticalspan")
 local PencilGeometry = require("lib/geometry")
+local Notes = require("lib/notes")
+local NoteCanvas = require("lib/notecanvas")
+local ButtonDialog = require("ui/widget/buttondialog")
+local ConfirmBox = require("ui/widget/confirmbox")
 local Screen = Device.screen
 local Size = require("ui/size")
 local InfoMessage = require("ui/widget/infomessage")
@@ -150,6 +154,11 @@ local Pencil = InputContainer:extend{
 
     -- Available colors for the pen (initialized in init() with actual Blitbuffer colors)
     available_colors = {},
+
+    -- Pen notes: blank canvases attached to the book, a chapter, a page or a highlight
+    notes = nil,          -- Notes store, see lib/notes.lua
+    notes_loaded = false, -- set true once the sidecar file was read (or found absent)
+    note_canvas = nil,    -- open NoteCanvas widget, or nil
 }
 
 function Pencil:init()
@@ -217,6 +226,10 @@ function Pencil:init()
     else
         logger.info("Pencil: doc_settings not ready in init, will load in onReaderReady")
     end
+    self.notes = Notes.newStore()
+    if self.ui.doc_settings and self.ui.doc_settings.doc_sidecar_dir then
+        self:loadNotes()
+    end
 
     -- Check if plugin is enabled globally and auto-setup
     if self:isEnabled() then
@@ -257,6 +270,12 @@ function Pencil:init()
         title = _("Pencil: toggle finger/pen mode"),
         reader = true,
     })
+    Dispatcher:registerAction("pencil_note_menu", {
+        category = "none",
+        event = "PencilNoteMenu",
+        title = _("Pencil: pen note…"),
+        reader = true,
+    })
     Dispatcher:registerAction("pencil_undo", {
         category = "none",
         event = "PencilUndo",
@@ -273,6 +292,7 @@ function Pencil:init()
     -- Install the (class-level, one-time) bookmark list hook so taps on
     -- pencil bookmarks open the saved image.
     self:installBookmarkHook()
+    self:installHighlightDialogButton()
 
     logger.info("Pencil: initialized, enabled =", self:isEnabled(), "tool =", self.current_tool, "strokes =", #self.strokes)
 end
@@ -331,6 +351,11 @@ end
 
 function Pencil:onPencilUndo()
     self:undoLastStroke()
+    return true
+end
+
+function Pencil:onPencilNoteMenu()
+    self:showNoteMenu()
     return true
 end
 
@@ -424,6 +449,15 @@ function Pencil:handleStylusSlot(input, slot)
         self:writeDebugLog(string.format("STYLUS SLOT: id=%d x=%d y=%d tool=%d eraser_active=%s",
             slot.id or -1, slot.x or 0, slot.y or 0, slot.tool or -1,
             tostring(self.eraser_button_active)))
+    end
+
+    -- An open note canvas takes the pen while it is the topmost widget. A
+    -- dialog above it gets the pen as a finger, like any other overlay.
+    if self.note_canvas then
+        if UIManager:getTopmostVisibleWidget() == self.note_canvas then
+            return self.note_canvas:handleStylusSlot(slot)
+        end
+        return false
     end
 
     -- Don't capture pen input when a menu or overlay is on top of the reader
@@ -1277,6 +1311,14 @@ function Pencil:addToMainMenu(menu_items)
                         end,
                     },
                 },
+                separator = true,
+            },
+            {
+                text = _("Pen note…"),
+                help_text = _("Open a blank canvas for handwritten notes attached to this page, this chapter or the whole book. Notes on a highlight are opened from the highlight menu. Notes are stored next to the book. The \"Pencil: pen note…\" gesture action opens the same chooser."),
+                callback = function()
+                    self:showNoteMenu()
+                end,
                 separator = true,
             },
             {
@@ -4310,9 +4352,289 @@ function Pencil:saveStrokes()
     end
 end
 
+-- Pen notes ------------------------------------------------------------------
+-- Blank canvases stored in <sidecar>/pencil_notes.lua and attached to the
+-- book, the current chapter, the current page or a highlight. The store and
+-- the anchor rules live in lib/notes.lua, the widget in lib/notecanvas.lua.
+
+local NOTE_TITLE_MAX_CHARS = 40
+
+function Pencil:getNotesFilePath()
+    local sidecar_dir = self.ui and self.ui.doc_settings and self.ui.doc_settings.doc_sidecar_dir
+    if not sidecar_dir then return nil end
+    return sidecar_dir .. "/pencil_notes.lua"
+end
+
+function Pencil:loadNotes()
+    self.notes = Notes.newStore()
+    local filepath = self:getNotesFilePath()
+    if not filepath then
+        logger.warn("Pencil: no sidecar dir available for loading pen notes")
+        return
+    end
+    if not lfs.attributes(filepath, "mode") then
+        self.notes_loaded = true
+        return
+    end
+    local ok, data = pcall(dofile, filepath)
+    if not ok then
+        logger.warn("Pencil: failed to load pen notes from", filepath, "error:", data)
+        return
+    end
+    self.notes = Notes.fromSaved(data, function(saved) return self:strokeFromSaved(saved) end)
+    self.notes_loaded = true
+    logger.info("Pencil: loaded", #self.notes.notes, "pen notes from", filepath)
+end
+
+function Pencil:saveNotes()
+    local filepath = self:getNotesFilePath()
+    if not filepath then
+        logger.warn("Pencil: no filepath available for saving pen notes")
+        return
+    end
+    -- Same guard as saveStrokes: never overwrite a file we could not read.
+    if not self.notes_loaded then
+        logger.warn("Pencil: refusing to save pen notes that were never loaded")
+        return
+    end
+    local ok, err = lfs.mkdir(self.ui.doc_settings.doc_sidecar_dir)
+    if not ok and err ~= "File exists" then
+        logger.warn("Pencil: failed to create sidecar dir:", err)
+    end
+    local data = Notes.toSaveable(self.notes, function(stroke) return self:strokeToSaveable(stroke) end)
+    local f, open_err = io.open(filepath, "w")
+    if not f then
+        logger.err("Pencil: failed to open pen notes file for writing:", filepath, "error:", open_err)
+        return
+    end
+    f:write("return " .. require("dump")(data))
+    f:close()
+    logger.info("Pencil: saved", #data.notes, "pen notes to", filepath)
+end
+
+-- Loads on demand and tells the user when the store is unusable, so a note
+-- is never drawn into a canvas that could not be saved.
+function Pencil:ensureNotesLoaded()
+    if not self.notes_loaded then
+        self:loadNotes()
+    end
+    if not self.notes_loaded then
+        UIManager:show(InfoMessage:new{
+            text = _("The pen notes of this book could not be loaded, so new notes would not be saved. See the log for details."),
+        })
+        return false
+    end
+    return true
+end
+
+-- Page of a page anchor in the current layout. Rolling documents re-derive
+-- it from the stored xpointer because page numbers move with the layout.
+function Pencil:resolveAnchorPage(anchor)
+    if self.ui.rolling and anchor.xpointer and self.ui.document
+            and self.ui.document.getPageFromXPointer then
+        local ok, pn = pcall(self.ui.document.getPageFromXPointer, self.ui.document, anchor.xpointer)
+        if ok and pn then return pn end
+    end
+    return anchor.page
+end
+
+function Pencil:bookAnchor()
+    return { kind = Notes.KIND_BOOK }
+end
+
+function Pencil:pageAnchor()
+    local anchor = { kind = Notes.KIND_PAGE, page = self:getCurrentPage() }
+    if self.ui.rolling and self.ui.document and self.ui.document.getXPointer then
+        anchor.xpointer = self.ui.document:getXPointer()
+    end
+    return anchor
+end
+
+-- nil when no table-of-contents entry precedes the current position.
+function Pencil:chapterAnchor()
+    local toc = self.ui.toc
+    if not (toc and toc.getTocIndexByPage) then return nil end
+    local pn_or_xp = self:getCurrentPage()
+    if self.ui.rolling and self.ui.document and self.ui.document.getXPointer then
+        pn_or_xp = self.ui.document:getXPointer()
+    end
+    local ok, index = pcall(toc.getTocIndexByPage, toc, pn_or_xp)
+    local item = ok and index and toc.toc and toc.toc[index]
+    if not item then return nil end
+    local title = item.title or ""
+    if toc.cleanUpTocTitle then
+        title = toc:cleanUpTocTitle(title)
+    end
+    return { kind = Notes.KIND_CHAPTER, page = item.page, xpointer = item.xpointer, title = title }
+end
+
+-- nil when the annotation index does not point at a stored item.
+function Pencil:highlightAnchor(index)
+    local annotations = self.ui.annotation and self.ui.annotation.annotations
+    local item = annotations and index and annotations[index]
+    if not (item and item.datetime) then return nil end
+    return {
+        kind = Notes.KIND_HIGHLIGHT,
+        datetime = item.datetime,
+        page = item.pageno or self:getPageNumber(item.page),
+        text = item.text,
+    }
+end
+
+function Pencil:noteTitle(note)
+    local anchor = note.anchor
+    if anchor.kind == Notes.KIND_BOOK then
+        return _("Book note")
+    elseif anchor.kind == Notes.KIND_CHAPTER then
+        return T(_("Chapter: %1"), anchor.title ~= "" and anchor.title or _("untitled"))
+    elseif anchor.kind == Notes.KIND_PAGE then
+        return T(_("Page %1"), tostring(self:resolveAnchorPage(anchor)))
+    else
+        return T(_("Highlight: %1"), Notes.snippet(anchor.text, NOTE_TITLE_MAX_CHARS))
+    end
+end
+
+function Pencil:findNote(anchor)
+    if not (anchor and self.notes) then return nil end
+    return Notes.find(self.notes, anchor, function(a) return self:resolveAnchorPage(a) end)
+end
+
+-- Opens the canvas for the anchor, creating the note if there is none. An
+-- untouched new note is dropped again when the canvas closes.
+function Pencil:openNote(anchor)
+    assert(anchor, "openNote needs an anchor")
+    if self.note_canvas then return end
+    if not self:ensureNotesLoaded() then return end
+
+    local note = self:findNote(anchor)
+    if not note then
+        note = Notes.add(self.notes, Notes.newNote(anchor, os.time()))
+    end
+    -- The canvas needs raw stylus input even when page drawing is disabled
+    self:setupStylusCallback()
+    self.note_canvas = NoteCanvas:new{
+        pencil = self,
+        note = note,
+        title = self:noteTitle(note),
+        on_delete = function(canvas)
+            self:confirmDeleteNote(note, canvas)
+        end,
+        on_close = function(_, changed)
+            self.note_canvas = nil
+            if not self.touch_zones_registered then
+                self:teardownStylusCallback()
+            end
+            if Notes.isEmpty(note) then
+                Notes.remove(self.notes, note)
+            end
+            if changed then
+                self:saveNotes()
+            end
+        end,
+    }
+    UIManager:show(self.note_canvas, "flashui")
+end
+
+function Pencil:openHighlightNote(index)
+    local anchor = self:highlightAnchor(index)
+    if not anchor then
+        logger.warn("Pencil: no annotation at index", index, "for a pen note")
+        return
+    end
+    self:openNote(anchor)
+end
+
+function Pencil:confirmDeleteNote(note, canvas)
+    UIManager:show(ConfirmBox:new{
+        text = T(_("Delete the pen note \"%1\"?"), self:noteTitle(note)),
+        ok_text = _("Delete"),
+        ok_callback = function()
+            for i = #note.strokes, 1, -1 do
+                note.strokes[i] = nil
+            end
+            canvas.changed = true
+            canvas:onClose()
+        end,
+    })
+end
+
+-- Chooser between a page, chapter and book note. Reached from the Pencil
+-- menu and from the "Pencil: pen note…" gesture action.
+function Pencil:showNoteMenu()
+    if self.note_canvas then return end
+    if not self:ensureNotesLoaded() then return end
+
+    local dialog
+    local function row(anchor, new_text, open_text, disabled_text)
+        local enabled = anchor ~= nil
+        local text = disabled_text
+        if enabled then
+            text = self:findNote(anchor) and open_text or new_text
+        end
+        return {{
+            text = text,
+            enabled = enabled,
+            callback = function()
+                UIManager:close(dialog)
+                self:openNote(anchor)
+            end,
+        }}
+    end
+    local chapter = self:chapterAnchor()
+    local chapter_name = chapter and Notes.snippet(chapter.title, NOTE_TITLE_MAX_CHARS) or ""
+    dialog = ButtonDialog:new{
+        title = _("Pen note"),
+        buttons = {
+            row(self:pageAnchor(),
+                _("New note for this page"),
+                _("Open note for this page")),
+            row(chapter,
+                T(_("New note for chapter \"%1\""), chapter_name),
+                T(_("Open note for chapter \"%1\""), chapter_name),
+                _("No chapter at this position")),
+            row(self:bookAnchor(),
+                _("New note for this book"),
+                _("Open note for this book")),
+        },
+    }
+    UIManager:show(dialog)
+end
+
+-- Adds "Pen note" to the highlight menu (the "…" dialog of an existing
+-- highlight, and the menu of a fresh text selection, which is highlighted
+-- first).
+function Pencil:installHighlightDialogButton()
+    local highlight = self.ui.highlight
+    if not (highlight and highlight.addToHighlightDialog) then return end
+    highlight:addToHighlightDialog("13_pencil_note", function(this, index)
+        return {
+            text = _("Pen note"),
+            callback = function()
+                if index then
+                    this:onClose()
+                    self:openHighlightNote(index)
+                elseif this.showHighlightPrompt then
+                    this:showHighlightPrompt(function(new_index)
+                        self:openHighlightNote(new_index)
+                    end)
+                else
+                    -- KOReader before the highlight prompt existed
+                    local new_index = this:saveHighlight(true)
+                    this:clear()
+                    self:openHighlightNote(new_index)
+                end
+            end,
+        }
+    end)
+end
+
 -- Handle document close
 function Pencil:onCloseDocument()
     logger.info("Pencil: onCloseDocument called, strokes count =", #self.strokes)
+
+    if self.note_canvas then
+        self.note_canvas:onClose()
+    end
 
     -- Cancel any pending refresh
     self:cancelPendingRefresh()
@@ -4353,6 +4675,10 @@ function Pencil:onSuspend()
     -- Same idea as onCloseDocument: don't lose a freshly drawn annotation
     -- across a device sleep.
     self:flushPendingCaptures()
+    if self.note_canvas and self.note_canvas.changed then
+        self.note_canvas:penUp()
+        self:saveNotes()
+    end
 end
 
 -- Handle reader ready (document fully loaded)
@@ -4366,6 +4692,9 @@ function Pencil:onReaderReady()
     -- Force reload strokes (in case they weren't loaded in init)
     if #self.strokes == 0 then
         self:loadStrokes()
+    end
+    if not self.notes_loaded then
+        self:loadNotes()
     end
     logger.info("Pencil: after loadStrokes, strokes count =", #self.strokes,
         "groups =", #self.annotation_groups)
@@ -4390,6 +4719,9 @@ function Pencil:onReadSettings(config)
     -- Only load if not already loaded
     if not self.strokes or #self.strokes == 0 then
         self:loadStrokes()
+    end
+    if not self.notes_loaded then
+        self:loadNotes()
     end
     -- Re-setup touch zones if enabled (in case they were torn down)
     if self:isEnabled() and not self.touch_zones_registered then

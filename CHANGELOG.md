@@ -26,7 +26,28 @@ Fork of [mysticknits/pencil.koplugin](https://github.com/mysticknits/pencil.kopl
   does report it, and now requires the press to last under 500 ms.
 - `spec/side_button_spec.lua` covers the tap/hold decision and mode switching.
 
+## 2026-09-23 (feat/note-canvas)
+
+- Pen notes: a full-screen blank canvas (`lib/notecanvas.lua`) for handwritten
+  notes attached to the current page, the current chapter, the whole book or a
+  highlight. The stylus callback is routed to the canvas while it is the
+  topmost widget, so pen, side-button highlighter and eraser end behave as on
+  a page; the title bar has an X to close and a menu with undo, clear and
+  delete.
+- Entry points: "Pen note…" in the Pencil menu and the "Pencil: pen note…"
+  gesture action open a chooser (page / chapter / book) that says whether a
+  note exists; "Pen note" in the highlight menu opens the note of a highlight
+  (highlighting a fresh selection first).
+- Storage in the sidecar as `pencil_notes.lua` (`lib/notes.lua`, pure and
+  tested). Anchors: page by page number, re-derived from an xpointer in
+  rolling documents; chapter by the TOC entry's xpointer or page; highlight
+  by the annotation's datetime; book as a singleton. Empty notes are dropped
+  on close and on load; a store that failed to load is never overwritten.
+- `spec/notes_spec.lua` and `spec/notecanvas_spec.lua` (KOReader widgets
+  stubbed) cover the store and the canvas input handling.
+
 ## Planned
 
-- Blank note canvas for pen notes, attachable per highlight, per page, or per
-  chapter.
+- Browsing all pen notes of a book (list, open, go to location).
+- Exporting pen notes as images or a PDF.
+- A marker on pages that have a pen note.
