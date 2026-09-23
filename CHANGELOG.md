@@ -52,11 +52,12 @@ Fork of [mysticknits/pencil.koplugin](https://github.com/mysticknits/pencil.kopl
 
 - Multi-page pen notes: a note is now a list of pages, each with its own
   strokes (store version 2; version 1 notes load as one page). On the canvas
-  a swipe east (or the forward page button) goes to the next page and adds a
-  blank one past the last, a swipe west (or the back page button) goes back.
-  The title bar subtitle shows "Page x of y". Undo and clear act on the
-  current page; blank pages are dropped when the canvas closes and are never
-  written to disk.
+  a swipe west (or the forward page button) turns to the next page and adds
+  a blank one past the last, a swipe east (or the back page button) goes
+  back, as in the reader. The title bar subtitle shows "Page x of y". Undo
+  and clear act on the current page; "Delete page" in the menu removes the
+  current page, asking first if it has strokes. Blank pages are dropped when
+  the canvas closes and are never written to disk.
 - Finger mode on the canvas: holding the side button and tapping the canvas
   toggles finger/pen mode (independent of the "Side button tap" setting, since
   the canvas has no pencil/eraser tool to toggle), and the canvas menu has a

@@ -139,6 +139,18 @@ describe("Notes", function()
             assert.equals(0, Notes.prunePages(blank))
         end)
 
+        it("removes pages and never leaves a note without one", function()
+            local note = Notes.newNote({ kind = "book" }, 1)
+            table.insert(note.pages[1].strokes, stroke(1, 1))
+            local second = Notes.addPage(note)
+            assert.equals(second, Notes.removePage(note, 2))
+            assert.equals(1, #note.pages)
+            assert.has_error(function() Notes.removePage(note, 2) end)
+            Notes.removePage(note, 1)
+            assert.equals(1, #note.pages)
+            assert.is_true(Notes.isEmpty(note))
+        end)
+
         it("clears a note down to one blank page in place", function()
             local note = Notes.newNote({ kind = "book" }, 1)
             local pages = note.pages

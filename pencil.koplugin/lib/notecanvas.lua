@@ -7,17 +7,19 @@ side button highlights and the eraser end erases exactly as on a page.
 Holding the side button and tapping toggles finger/pen mode; in finger
 mode the bare tip is left to gesture detection, like a finger.
 
-Fingers (and the tip in finger mode) swipe between pages: a swipe to the
-right on the last page adds a blank one, a swipe to the left goes back.
-The hardware page buttons do the same. The title bar shows the page
-count, the X closes the canvas and the menu icon offers undo, clear,
-the mode toggle and delete.
+Fingers (and the tip in finger mode) swipe between pages like in the
+reader: a swipe to the left turns forward and adds a blank page past the
+last one, a swipe to the right goes back. The hardware page buttons do
+the same. The title bar shows the page count, the X closes the canvas and
+the menu icon offers undo, clear page, delete page, the mode toggle and
+delete note.
 
 @module pencil.lib.notecanvas
 --]]--
 
 local Blitbuffer = require("ffi/blitbuffer")
 local ButtonDialog = require("ui/widget/buttondialog")
+local ConfirmBox = require("ui/widget/confirmbox")
 local Device = require("device")
 local Geom = require("ui/geometry")
 local GestureRange = require("ui/gesturerange")
@@ -361,10 +363,33 @@ function NoteCanvas:prevPage()
     return true
 end
 
+-- Removes the current page; a blank one is left when it was the last.
+function NoteCanvas:deletePage()
+    self:penUp()
+    local page = self:currentPage()
+    if #self.note.pages == 1 and Notes.isPageEmpty(page) then return end
+    Notes.removePage(self.note, self.page_index)
+    self.undo_stacks[page] = nil
+    self.changed = true
+    self:goToPage(math.min(self.page_index, #self.note.pages))
+end
+
+function NoteCanvas:confirmDeletePage()
+    if Notes.isPageEmpty(self:currentPage()) then
+        self:deletePage()
+        return
+    end
+    UIManager:show(ConfirmBox:new{
+        text = T(_("Delete page %1 of %2 of this note?"), self.page_index, #self.note.pages),
+        ok_text = _("Delete"),
+        ok_callback = function() self:deletePage() end,
+    })
+end
+
 function NoteCanvas:onSwipe(_, ges)
-    if ges.direction == "east" then
+    if ges.direction == "west" then
         return self:nextPage()
-    elseif ges.direction == "west" then
+    elseif ges.direction == "east" then
         return self:prevPage()
     end
     return false
@@ -399,6 +424,14 @@ function NoteCanvas:showMenu()
             callback = function()
                 UIManager:close(dialog)
                 self:clear()
+            end,
+        }},
+        {{
+            text = _("Delete page"),
+            enabled = #self.note.pages > 1 or #self:strokes() > 0,
+            callback = function()
+                UIManager:close(dialog)
+                self:confirmDeletePage()
             end,
         }},
         {{

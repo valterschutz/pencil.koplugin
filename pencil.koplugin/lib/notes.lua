@@ -81,6 +81,19 @@ function Notes.addPage(note, after)
     return page, after + 1
 end
 
+--- Removes the page at index. A note always keeps one page, so removing
+-- the last remaining page leaves a blank one. Returns the removed page.
+function Notes.removePage(note, index)
+    assertNote(note)
+    assert(type(index) == "number" and index >= 1 and index <= #note.pages,
+        "page index out of range: " .. tostring(index))
+    local page = table.remove(note.pages, index)
+    if #note.pages == 0 then
+        note.pages[1] = Notes.newPage()
+    end
+    return page
+end
+
 function Notes.isPageEmpty(page)
     return #page.strokes == 0
 end
